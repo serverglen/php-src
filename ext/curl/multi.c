@@ -22,10 +22,9 @@
 
 #include "php.h"
 #include "Zend/zend_interfaces.h"
+#include "Zend/zend_smart_str.h"
 
-#ifdef HAVE_CURL
-
-#include "php_curl.h"
+#include "curl_private.h"
 
 #include <curl/curl.h>
 #include <curl/multi.h>
@@ -50,7 +49,7 @@
 
 /* CurlMultiHandle class */
 
-static zend_class_entry *curl_multi_ce;
+zend_class_entry *curl_multi_ce;
 
 static inline php_curlm *curl_multi_from_obj(zend_object *obj) {
 	return (php_curlm *)((char *)(obj) - XtOffsetOf(php_curlm, std));
@@ -538,6 +537,12 @@ void curl_multi_free_obj(zend_object *object)
 	php_curl *ch;
 	zval	*pz_ch;
 
+	if (!mh->multi) {
+		/* Can happen if constructor throws. */
+		zend_object_std_dtor(&mh->std);
+		return;
+	}
+
 	for (pz_ch = (zval *)zend_llist_get_first_ex(&mh->easyh, &pos); pz_ch;
 		pz_ch = (zval *)zend_llist_get_next_ex(&mh->easyh, &pos)) {
 		if (!(OBJ_FLAGS(Z_OBJ_P(pz_ch)) & IS_OBJ_FREE_CALLED)) {
@@ -599,5 +604,3 @@ void curl_multi_register_class(const zend_function_entry *method_entries) {
 	curl_multi_handlers.clone_obj = NULL;
 	curl_multi_handlers.cast_object = curl_cast_object;
 }
-
-#endif

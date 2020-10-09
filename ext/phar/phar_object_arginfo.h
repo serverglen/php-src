@@ -1,5 +1,5 @@
 /* This is a generated file, edit the .stub.php file instead.
- * Stub hash: be0f8bcd0ef8fdac59700160dff7d0beb210aa48 */
+ * Stub hash: 8dff2050ad65f94a41176cfb280d02c4fb61dcf7 */
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar___construct, 0, 0, 1)
 	ZEND_ARG_TYPE_INFO(0, filename, IS_STRING, 0)
@@ -16,7 +16,7 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_addFile, 0, 0, 1)
 	ZEND_ARG_TYPE_INFO(0, filename, IS_STRING, 0)
-	ZEND_ARG_TYPE_INFO(0, localname, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, localname, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_addFromString, 0, 0, 2)
@@ -26,12 +26,12 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_buildFromDirectory, 0, 0, 1)
 	ZEND_ARG_TYPE_INFO(0, base_dir, IS_STRING, 0)
-	ZEND_ARG_TYPE_INFO(0, regex, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, regex, IS_STRING, 0, "\"\"")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_buildFromIterator, 0, 0, 1)
 	ZEND_ARG_OBJ_INFO(0, iterator, Traversable, 0)
-	ZEND_ARG_TYPE_INFO(0, base_directory, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, base_directory, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_compressFiles, 0, 0, 1)
@@ -42,17 +42,17 @@ ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_compress, 0, 0, 1)
 	ZEND_ARG_TYPE_INFO(0, compression_type, IS_LONG, 0)
-	ZEND_ARG_TYPE_INFO(0, file_ext, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, file_ext, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_decompress, 0, 0, 0)
-	ZEND_ARG_TYPE_INFO(0, file_ext, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, file_ext, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_convertToExecutable, 0, 0, 0)
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, format, IS_LONG, 0, "9021976")
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, compression_type, IS_LONG, 0, "9021976")
-	ZEND_ARG_TYPE_INFO(0, file_ext, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, format, IS_LONG, 1, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, compression_type, IS_LONG, 1, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, file_ext, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 #define arginfo_class_Phar_convertToData arginfo_class_Phar_convertToExecutable
@@ -63,7 +63,7 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_copy, 0, 0, 2)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_count, 0, 0, 0)
-	ZEND_ARG_TYPE_INFO(0, mode, IS_LONG, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, mode, IS_LONG, 0, "COUNT_NORMAL")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_delete, 0, 0, 1)
@@ -129,12 +129,12 @@ ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_setDefaultStub, 0, 0, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_setMetadata, 0, 0, 1)
-	ZEND_ARG_INFO(0, metadata)
+	ZEND_ARG_TYPE_INFO(0, metadata, IS_MIXED, 0)
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_setSignatureAlgorithm, 0, 0, 1)
 	ZEND_ARG_TYPE_INFO(0, algorithm, IS_LONG, 0)
-	ZEND_ARG_TYPE_INFO(0, privatekey, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, privatekey, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_Phar_setStub, 0, 0, 1)
@@ -157,8 +157,8 @@ ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Phar_canWrite, 0, 0, _IS_B
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Phar_createDefaultStub, 0, 0, IS_STRING, 0)
-	ZEND_ARG_TYPE_INFO(0, index, IS_STRING, 0)
-	ZEND_ARG_TYPE_INFO(0, webindex, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, index, IS_STRING, 1, "null")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, webindex, IS_STRING, 1, "null")
 ZEND_END_ARG_INFO()
 
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Phar_getSupportedCompression, 0, 0, IS_ARRAY, 0)
@@ -204,7 +204,7 @@ ZEND_END_ARG_INFO()
 ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX(arginfo_class_Phar_webPhar, 0, 0, IS_VOID, 0)
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, alias, IS_STRING, 1, "null")
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, index, IS_STRING, 1, "null")
-	ZEND_ARG_TYPE_INFO(0, f404, IS_STRING, 0)
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, f404, IS_STRING, 0, "\"\"")
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, mimetypes, IS_ARRAY, 0, "[]")
 	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, rewrites, IS_CALLABLE, 1, "null")
 ZEND_END_ARG_INFO()
@@ -355,14 +355,12 @@ ZEND_END_ARG_INFO()
 #define arginfo_class_PharFileInfo_hasMetadata arginfo_class_Phar___destruct
 
 ZEND_BEGIN_ARG_INFO_EX(arginfo_class_PharFileInfo_isCompressed, 0, 0, 0)
-	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, compression_type, IS_LONG, 0, "9021976")
+	ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE(0, compression_type, IS_LONG, 1, "null")
 ZEND_END_ARG_INFO()
 
 #define arginfo_class_PharFileInfo_isCRCChecked arginfo_class_Phar___destruct
 
-ZEND_BEGIN_ARG_INFO_EX(arginfo_class_PharFileInfo_setMetadata, 0, 0, 1)
-	ZEND_ARG_TYPE_INFO(0, metadata, IS_MIXED, 0)
-ZEND_END_ARG_INFO()
+#define arginfo_class_PharFileInfo_setMetadata arginfo_class_Phar_setMetadata
 
 
 ZEND_METHOD(Phar, __construct);

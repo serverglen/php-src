@@ -523,7 +523,7 @@ PHP_MINFO_FUNCTION(odbc)
 	php_info_print_table_row(2, "Active Links", buf);
 	php_info_print_table_row(2, "ODBC library", PHP_ODBC_TYPE);
 #ifdef ODBCVER
-	snprintf(buf, sizeof(buf), "0x%0.4x", ODBCVER);
+	snprintf(buf, sizeof(buf), "0x%.4x", ODBCVER);
 	php_info_print_table_row(2, "ODBCVER", buf);
 #endif
 #ifndef PHP_WIN32
@@ -560,7 +560,7 @@ void odbc_sql_error(ODBC_SQL_ERROR_PARAMS)
 	   while(henv != SQL_NULL_HENV){
 		do {
 	 */
-	rc = SQLError(henv, conn, stmt, ODBCG(laststate), &error, ODBCG(lasterrormsg), sizeof(ODBCG(lasterrormsg))-1, &errormsgsize);
+	rc = SQLError(henv, conn, stmt, (SQLCHAR *) ODBCG(laststate), &error, (SQLCHAR *) ODBCG(lasterrormsg), sizeof(ODBCG(lasterrormsg))-1, &errormsgsize);
 	if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
 		snprintf(ODBCG(laststate), sizeof(ODBCG(laststate)), "HY000");
 		snprintf(ODBCG(lasterrormsg), sizeof(ODBCG(lasterrormsg)), "Failed to fetch error message");
@@ -787,6 +787,11 @@ void odbc_column_lengths(INTERNAL_FUNCTION_PARAMETERS, int type)
 		RETURN_THROWS();
 	}
 
+	if (pv_num < 1) {
+		zend_argument_value_error(2, "must be greater than 0");
+		RETURN_THROWS();
+	}
+
 	if (result->numcols == 0) {
 		php_error_docref(NULL, E_WARNING, "No tuples available at this result index");
 		RETURN_FALSE;
@@ -794,11 +799,6 @@ void odbc_column_lengths(INTERNAL_FUNCTION_PARAMETERS, int type)
 
 	if (pv_num > result->numcols) {
 		php_error_docref(NULL, E_WARNING, "Field index larger than number of fields");
-		RETURN_FALSE;
-	}
-
-	if (pv_num < 1) {
-		php_error_docref(NULL, E_WARNING, "Field numbering starts at 1");
 		RETURN_FALSE;
 	}
 
@@ -912,7 +912,7 @@ PHP_FUNCTION(odbc_prepare)
 	}
 #endif
 
-	rc = SQLPrepare(result->stmt, query, SQL_NTS);
+	rc = SQLPrepare(result->stmt, (SQLCHAR *) query, SQL_NTS);
 	switch (rc) {
 		case SQL_SUCCESS:
 			break;
@@ -960,23 +960,34 @@ PHP_FUNCTION(odbc_prepare)
  * Execute prepared SQL statement. Supports only input parameters.
  */
 
+typedef struct odbc_params_t {
+	SQLLEN vallen;
+	int fp;
+} odbc_params_t;
+
+static void odbc_release_params(odbc_result *result, odbc_params_t *params) {
+	SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
+	for (int i = 0; i < result->numparams; i++) {
+		if (params[i].fp != -1) {
+			close(params[i].fp);
+		}
+	}
+	efree(params);
+}
+
 /* {{{ Execute a prepared statement */
 PHP_FUNCTION(odbc_execute)
 {
-	zval *pv_res, *pv_param_arr, *tmp;
-	typedef struct params_t {
-		SQLLEN vallen;
-		int fp;
-	} params_t;
-	params_t *params = NULL;
+	zval *pv_res, *tmp;
+	HashTable *pv_param_ht = (HashTable *) &zend_empty_array;
+	odbc_params_t *params = NULL;
 	char *filename;
-	unsigned char otype;
 	SQLSMALLINT ctype;
-   	odbc_result *result;
-	int numArgs = ZEND_NUM_ARGS(), i, ne;
+	odbc_result *result;
+	int i, ne;
 	RETCODE rc;
 
-	if (zend_parse_parameters(numArgs, "r|a", &pv_res, &pv_param_arr) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|h", &pv_res, &pv_param_ht) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -984,50 +995,27 @@ PHP_FUNCTION(odbc_execute)
 		RETURN_THROWS();
 	}
 
-	/* XXX check for already bound parameters*/
-	if (result->numparams > 0 && numArgs == 1) {
-		php_error_docref(NULL, E_WARNING, "No parameters to SQL statement given");
-		RETURN_FALSE;
-	}
-
 	if (result->numparams > 0) {
-		if ((ne = zend_hash_num_elements(Z_ARRVAL_P(pv_param_arr))) < result->numparams) {
-			php_error_docref(NULL, E_WARNING,"Not enough parameters (%d should be %d) given", ne, result->numparams);
+		if ((ne = zend_hash_num_elements(pv_param_ht)) < result->numparams) {
+			php_error_docref(NULL, E_WARNING, "Not enough parameters (%d should be %d) given", ne, result->numparams);
 			RETURN_FALSE;
 		}
 
-		zend_hash_internal_pointer_reset(Z_ARRVAL_P(pv_param_arr));
-		params = (params_t *)safe_emalloc(sizeof(params_t), result->numparams, 0);
+		params = (odbc_params_t *)safe_emalloc(sizeof(odbc_params_t), result->numparams, 0);
 		for(i = 0; i < result->numparams; i++) {
 			params[i].fp = -1;
 		}
 
-		for(i = 1; i <= result->numparams; i++) {
-			if ((tmp = zend_hash_get_current_data(Z_ARRVAL_P(pv_param_arr))) == NULL) {
-				php_error_docref(NULL, E_WARNING,"Error getting parameter");
-				SQLFreeStmt(result->stmt,SQL_RESET_PARAMS);
-				for (i = 0; i < result->numparams; i++) {
-					if (params[i].fp != -1) {
-						close(params[i].fp);
-					}
-				}
-				efree(params);
-				RETURN_FALSE;
-			}
-
-			otype = Z_TYPE_P(tmp);
-			if (!try_convert_to_string(tmp)) {
-				SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
-				for (i = 0; i < result->numparams; i++) {
-					if (params[i].fp != -1) {
-						close(params[i].fp);
-					}
-				}
-				efree(params);
+		i = 1;
+		ZEND_HASH_FOREACH_VAL(pv_param_ht, tmp) {
+			unsigned char otype = Z_TYPE_P(tmp);
+			zend_string *tmpstr = zval_try_get_string(tmp);
+			if (!tmpstr) {
+				odbc_release_params(result, params);
 				RETURN_THROWS();
 			}
 
-			params[i-1].vallen = Z_STRLEN_P(tmp);
+			params[i-1].vallen = ZSTR_LEN(tmpstr);
 			params[i-1].fp = -1;
 
 			if (IS_SQL_BINARY(result->param_info[i-1].sqltype)) {
@@ -1036,38 +1024,30 @@ PHP_FUNCTION(odbc_execute)
 				ctype = SQL_C_CHAR;
 			}
 
-			if (Z_STRLEN_P(tmp) > 2 &&
-				Z_STRVAL_P(tmp)[0] == '\'' &&
-				Z_STRVAL_P(tmp)[Z_STRLEN_P(tmp) - 1] == '\'') {
+			if (ZSTR_LEN(tmpstr) > 2 &&
+				ZSTR_VAL(tmpstr)[0] == '\'' &&
+				ZSTR_VAL(tmpstr)[ZSTR_LEN(tmpstr) - 1] == '\'') {
 
-				if (CHECK_ZVAL_NULL_PATH(tmp)) {
+				if (ZSTR_LEN(tmpstr) != strlen(ZSTR_VAL(tmpstr))) {
+					odbc_release_params(result, params);
+					zend_string_release(tmpstr);
 					RETURN_FALSE;
 				}
-				filename = estrndup(&Z_STRVAL_P(tmp)[1], Z_STRLEN_P(tmp) - 2);
+				filename = estrndup(&ZSTR_VAL(tmpstr)[1], ZSTR_LEN(tmpstr) - 2);
 				filename[strlen(filename)] = '\0';
 
 				/* Check the basedir */
 				if (php_check_open_basedir(filename)) {
 					efree(filename);
-					SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
-					for (i = 0; i < result->numparams; i++) {
-						if (params[i].fp != -1) {
-							close(params[i].fp);
-						}
-					}
-					efree(params);
+					odbc_release_params(result, params);
+					zend_string_release(tmpstr);
 					RETURN_FALSE;
 				}
 
 				if ((params[i-1].fp = open(filename,O_RDONLY)) == -1) {
 					php_error_docref(NULL, E_WARNING,"Can't open file %s", filename);
-					SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
-					for (i = 0; i < result->numparams; i++) {
-						if (params[i].fp != -1) {
-							close(params[i].fp);
-						}
-					}
-					efree(params);
+					odbc_release_params(result, params);
+					zend_string_release(tmpstr);
 					efree(filename);
 					RETURN_FALSE;
 				}
@@ -1090,22 +1070,18 @@ PHP_FUNCTION(odbc_execute)
 
 				rc = SQLBindParameter(result->stmt, (SQLUSMALLINT)i, SQL_PARAM_INPUT,
 									  ctype, result->param_info[i-1].sqltype, result->param_info[i-1].precision, result->param_info[i-1].scale,
-									  Z_STRVAL_P(tmp), 0,
+									  ZSTR_VAL(tmpstr), 0,
 									  &params[i-1].vallen);
 			}
 			if (rc == SQL_ERROR) {
 				odbc_sql_error(result->conn_ptr, result->stmt, "SQLBindParameter");
-				SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
-				for (i = 0; i < result->numparams; i++) {
-					if (params[i].fp != -1) {
-						close(params[i].fp);
-					}
-				}
-				efree(params);
+				odbc_release_params(result, params);
+				zend_string_release(tmpstr);
 				RETURN_FALSE;
 			}
-			zend_hash_move_forward(Z_ARRVAL_P(pv_param_arr));
-		}
+			zend_string_release(tmpstr);
+			if (++i > result->numparams) break;
+		} ZEND_HASH_FOREACH_END();
 	}
 	/* Close cursor, needed for doing multiple selects */
 	rc = SQLFreeStmt(result->stmt, SQL_CLOSE);
@@ -1114,42 +1090,35 @@ PHP_FUNCTION(odbc_execute)
 		odbc_sql_error(result->conn_ptr, result->stmt, "SQLFreeStmt");
 	}
 
-	rc = SQLExecute(result->stmt);
-
 	result->fetched = 0;
-	if (rc == SQL_NEED_DATA) {
-		char buf[4096];
-		int fp, nbytes;
-		while (rc == SQL_NEED_DATA) {
-			rc = SQLParamData(result->stmt, (void*)&fp);
-			if (rc == SQL_NEED_DATA) {
-				while ((nbytes = read(fp, &buf, 4096)) > 0) {
-					SQLPutData(result->stmt, (void*)&buf, nbytes);
+	rc = SQLExecute(result->stmt);
+	switch (rc) {
+		case SQL_NEED_DATA: {
+			char buf[4096];
+			int fp, nbytes;
+			while (rc == SQL_NEED_DATA) {
+				rc = SQLParamData(result->stmt, (void*)&fp);
+				if (rc == SQL_NEED_DATA) {
+					while ((nbytes = read(fp, &buf, 4096)) > 0) {
+						SQLPutData(result->stmt, (void*)&buf, nbytes);
+					}
 				}
 			}
+			break;
 		}
-	} else {
-		switch (rc) {
-			case SQL_SUCCESS:
-				break;
-			case SQL_NO_DATA_FOUND:
-			case SQL_SUCCESS_WITH_INFO:
-				odbc_sql_error(result->conn_ptr, result->stmt, "SQLExecute");
-				break;
-			default:
-				odbc_sql_error(result->conn_ptr, result->stmt, "SQLExecute");
-				RETVAL_FALSE;
-		}
+		case SQL_SUCCESS:
+			break;
+		case SQL_NO_DATA_FOUND:
+		case SQL_SUCCESS_WITH_INFO:
+			odbc_sql_error(result->conn_ptr, result->stmt, "SQLExecute");
+			break;
+		default:
+			odbc_sql_error(result->conn_ptr, result->stmt, "SQLExecute");
+			RETVAL_FALSE;
 	}
 
 	if (result->numparams > 0) {
-		SQLFreeStmt(result->stmt, SQL_RESET_PARAMS);
-		for(i = 0; i < result->numparams; i++) {
-			if (params[i].fp != -1) {
-				close(params[i].fp);
-			}
-		}
-		efree(params);
+		odbc_release_params(result, params);
 	}
 
 	if (rc == SQL_SUCCESS || rc == SQL_SUCCESS_WITH_INFO || rc == SQL_NO_DATA_FOUND) {
@@ -1196,7 +1165,7 @@ PHP_FUNCTION(odbc_cursor)
 
 	if (max_len > 0) {
 		cursorname = emalloc(max_len + 1);
-		rc = SQLGetCursorName(result->stmt,cursorname,(SQLSMALLINT)max_len,&len);
+		rc = SQLGetCursorName(result->stmt, (SQLCHAR *) cursorname, (SQLSMALLINT)max_len, &len);
 		if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
 			char        state[6];     /* Not used */
 	 		SQLINTEGER  error;        /* Not used */
@@ -1204,11 +1173,11 @@ PHP_FUNCTION(odbc_cursor)
 			SQLSMALLINT errormsgsize; /* Not used */
 
 			SQLError( result->conn_ptr->henv, result->conn_ptr->hdbc,
-						result->stmt, state, &error, errormsg,
+						result->stmt, (SQLCHAR *) state, &error, (SQLCHAR *) errormsg,
 						sizeof(errormsg)-1, &errormsgsize);
 			if (!strncmp(state,"S1015",5)) {
 				snprintf(cursorname, max_len+1, "php_curs_" ZEND_ULONG_FMT, (zend_ulong)result->stmt);
-				if (SQLSetCursorName(result->stmt,cursorname,SQL_NTS) != SQL_SUCCESS) {
+				if (SQLSetCursorName(result->stmt, (SQLCHAR *) cursorname, SQL_NTS) != SQL_SUCCESS) {
 					odbc_sql_error(result->conn_ptr, result->stmt, "SQLSetCursorName");
 					RETVAL_FALSE;
 				} else {
@@ -1246,8 +1215,8 @@ PHP_FUNCTION(odbc_data_source)
 	fetch_type = (SQLSMALLINT) zv_fetch_type;
 
 	if (!(fetch_type == SQL_FETCH_FIRST || fetch_type == SQL_FETCH_NEXT)) {
-		php_error_docref(NULL, E_WARNING, "Invalid fetch type (%d)", fetch_type);
-		RETURN_FALSE;
+		zend_argument_value_error(2, "must be either SQL_FETCH_FIRST or SQL_FETCH_NEXT");
+		RETURN_THROWS();
 	}
 
 	if (!(conn = (odbc_connection *)zend_fetch_resource2(Z_RES_P(zv_conn), "ODBC-Link", le_conn, le_pconn))) {
@@ -1281,8 +1250,8 @@ PHP_FUNCTION(odbc_data_source)
 
 	array_init(return_value);
 
-	add_assoc_string_ex(return_value, "server", sizeof("server")-1, server_name);
-	add_assoc_string_ex(return_value, "description", sizeof("description")-1, desc);
+	add_assoc_string_ex(return_value, "server", sizeof("server")-1, (char *) server_name);
+	add_assoc_string_ex(return_value, "description", sizeof("description")-1, (char *) desc);
 
 }
 /* }}} */
@@ -1293,7 +1262,6 @@ PHP_FUNCTION(odbc_data_source)
 PHP_FUNCTION(odbc_exec)
 {
 	zval *pv_conn;
-	zend_long pv_flags;
 	char *query;
 	size_t query_len;
 	odbc_result *result = NULL;
@@ -1303,7 +1271,7 @@ PHP_FUNCTION(odbc_exec)
 	SQLUINTEGER      scrollopts;
 #endif
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "rs|l", &pv_conn, &query, &query_len, &pv_flags) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "rs", &pv_conn, &query, &query_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -1342,7 +1310,7 @@ PHP_FUNCTION(odbc_exec)
 	}
 #endif
 
-	rc = SQLExecDirect(result->stmt, query, SQL_NTS);
+	rc = SQLExecDirect(result->stmt, (SQLCHAR *) query, SQL_NTS);
 	if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO && rc != SQL_NO_DATA_FOUND) {
 		/* XXX FIXME we should really check out SQLSTATE with SQLError
 		 * in case rc is SQL_SUCCESS_WITH_INFO here.
@@ -1682,21 +1650,19 @@ PHP_FUNCTION(solid_fetch_prev)
 /* {{{ Fetch a row */
 PHP_FUNCTION(odbc_fetch_row)
 {
-	SQLLEN rownum;
 	odbc_result *result;
 	RETCODE rc;
 	zval *pv_res;
-	zend_long pv_row = 1;
+	zend_long pv_row;
+	zend_bool pv_row_is_null = 1;
 #ifdef HAVE_SQL_EXTENDED_FETCH
 	SQLULEN crow;
 	SQLUSMALLINT RowStatus[1];
 #endif
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|l", &pv_res, &pv_row) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|l!", &pv_res, &pv_row, &pv_row_is_null) == FAILURE) {
 		RETURN_THROWS();
 	}
-
-	rownum = pv_row;
 
 	if ((result = (odbc_result *)zend_fetch_resource(Z_RES_P(pv_res), "ODBC result", le_result)) == NULL) {
 		RETURN_THROWS();
@@ -1709,8 +1675,8 @@ PHP_FUNCTION(odbc_fetch_row)
 
 #ifdef HAVE_SQL_EXTENDED_FETCH
 	if (result->fetch_abs) {
-		if (ZEND_NUM_ARGS() > 1) {
-			rc = SQLExtendedFetch(result->stmt,SQL_FETCH_ABSOLUTE,rownum,&crow,RowStatus);
+		if (!pv_row_is_null) {
+			rc = SQLExtendedFetch(result->stmt,SQL_FETCH_ABSOLUTE,(SQLLEN)pv_row,&crow,RowStatus);
 		} else {
 			rc = SQLExtendedFetch(result->stmt,SQL_FETCH_NEXT,1,&crow,RowStatus);
 		}
@@ -1722,8 +1688,8 @@ PHP_FUNCTION(odbc_fetch_row)
 		RETURN_FALSE;
 	}
 
-	if (ZEND_NUM_ARGS() > 1) {
-		result->fetched = rownum;
+	if (!pv_row_is_null) {
+		result->fetched = (SQLLEN)pv_row;
 	} else {
 		result->fetched++;
 	}
@@ -1736,31 +1702,31 @@ PHP_FUNCTION(odbc_fetch_row)
 PHP_FUNCTION(odbc_result)
 {
 	char *field;
-	zend_string *field_str;
+	zend_string *field_str, *pv_field_str;
+	zend_long pv_field_long;
 	int field_ind;
 	SQLSMALLINT sql_c_type = SQL_C_CHAR;
 	odbc_result *result;
 	int i = 0;
 	RETCODE rc;
 	SQLLEN	fieldsize;
-	zval *pv_res, *pv_field;
+	zval *pv_res;
 #ifdef HAVE_SQL_EXTENDED_FETCH
 	SQLULEN crow;
 	SQLUSMALLINT RowStatus[1];
 #endif
 
-	field_ind = -1;
-	field = NULL;
+	ZEND_PARSE_PARAMETERS_START(2, 2)
+		Z_PARAM_RESOURCE(pv_res)
+		Z_PARAM_STR_OR_LONG(pv_field_str, pv_field_long)
+	ZEND_PARSE_PARAMETERS_END();
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "rz", &pv_res, &pv_field) == FAILURE) {
-		RETURN_THROWS();
-	}
-
-	if (Z_TYPE_P(pv_field) == IS_STRING) {
-		field = Z_STRVAL_P(pv_field);
+	if (pv_field_str) {
+		field = ZSTR_VAL(pv_field_str);
+		field_ind = -1;
 	} else {
-		convert_to_long_ex(pv_field);
-		field_ind = Z_LVAL_P(pv_field) - 1;
+		field = NULL;
+		field_ind = (int) pv_field_long - 1;
 	}
 
 	if ((result = (odbc_result *)zend_fetch_resource(Z_RES_P(pv_res), "ODBC result", le_result)) == NULL) {
@@ -1878,6 +1844,7 @@ PHP_FUNCTION(odbc_result)
 			if (rc != SQL_SUCCESS_WITH_INFO) {
 				field_str = zend_string_truncate(field_str, result->values[field_ind].vallen, 0);
 			}
+			ZSTR_VAL(field_str)[ZSTR_LEN(field_str)] = '\0';
 			RETURN_NEW_STR(field_str);
 			break;
 
@@ -2130,7 +2097,7 @@ int odbc_sqlconnect(odbc_connection **conn, char *db, char *uid, char *pwd, int 
  * #ifdef HAVE_EMPRESS */
 	{
 		int     direct = 0;
-		char    dsnbuf[1024];
+		SQLCHAR dsnbuf[1024];
 		short   dsnbuflen;
 		char    *ldb = 0;
 		int		ldb_len = 0;
@@ -2147,9 +2114,9 @@ int odbc_sqlconnect(odbc_connection **conn, char *db, char *uid, char *pwd, int 
 		}
 
 		if (direct) {
-			rc = SQLDriverConnect((*conn)->hdbc, NULL, ldb, strlen(ldb), dsnbuf, sizeof(dsnbuf) - 1, &dsnbuflen, SQL_DRIVER_NOPROMPT);
+			rc = SQLDriverConnect((*conn)->hdbc, NULL, (SQLCHAR *) ldb, strlen(ldb), dsnbuf, sizeof(dsnbuf) - 1, &dsnbuflen, SQL_DRIVER_NOPROMPT);
 		} else {
-			rc = SQLConnect((*conn)->hdbc, db, SQL_NTS, uid, SQL_NTS, pwd, SQL_NTS);
+			rc = SQLConnect((*conn)->hdbc, (SQLCHAR *) db, SQL_NTS, (SQLCHAR *) uid, SQL_NTS, (SQLCHAR *) pwd, SQL_NTS);
 		}
 
 		if (ldb) {
@@ -2157,7 +2124,7 @@ int odbc_sqlconnect(odbc_connection **conn, char *db, char *uid, char *pwd, int 
 		}
 	}
 #else
-	rc = SQLConnect((*conn)->hdbc, db, SQL_NTS, uid, SQL_NTS, pwd, SQL_NTS);
+	rc = SQLConnect((*conn)->hdbc, (SQLCHAR *) db, SQL_NTS, uid, SQL_NTS, pwd, SQL_NTS);
 #endif
 #endif
 	if (rc != SQL_SUCCESS && rc != SQL_SUCCESS_WITH_INFO) {
@@ -2174,15 +2141,7 @@ int odbc_sqlconnect(odbc_connection **conn, char *db, char *uid, char *pwd, int 
 /* Persistent connections: two list-types le_pconn, le_conn and a plist
  * where hashed connection info is stored together with index pointer to
  * the actual link of type le_pconn in the list. Only persistent
- * connections get hashed up. Normal connections use existing pconnections.
- * Maybe this has to change with regard to transactions on pconnections?
- * Possibly set autocommit to on on request shutdown.
- *
- * We do have to hash non-persistent connections, and reuse connections.
- * In the case where two connects were being made, without closing the first
- * connect, access violations were occurring.  This is because some of the
- * "globals" in this module should actually be per-connection variables.  I
- * simply fixed things to get them working for now.  Shane
+ * connections get hashed up.
  */
 /* {{{ odbc_do_connect */
 void odbc_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
@@ -2191,8 +2150,7 @@ void odbc_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 	size_t db_len, uid_len, pwd_len;
 	zend_long pv_opt = SQL_CUR_DEFAULT;
 	odbc_connection *db_conn;
-	char *hashed_details;
-	int hashed_len, cur_opt;
+	int cur_opt;
 
 	/*  Now an optional 4th parameter specifying the cursor type
 	 *  defaulting to the cursors default
@@ -2209,8 +2167,9 @@ void odbc_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 			cur_opt == SQL_CUR_USE_ODBC ||
 			cur_opt == SQL_CUR_USE_DRIVER ||
 			cur_opt == SQL_CUR_DEFAULT) ) {
-			php_error_docref(NULL, E_WARNING, "Invalid Cursor type (%d)", cur_opt);
-			RETURN_FALSE;
+			zend_argument_value_error(4, "must be one of SQL_CUR_USE_IF_NEEDED, "
+				"SQL_CUR_USE_ODBC, or SQL_CUR_USE_DRIVER");
+			RETURN_THROWS();
 		}
 	}
 
@@ -2218,19 +2177,14 @@ void odbc_do_connect(INTERNAL_FUNCTION_PARAMETERS, int persistent)
 		persistent = 0;
 	}
 
-	hashed_len = spprintf(&hashed_details, 0, "%s_%s_%s_%s_%d", ODBC_TYPE, db, uid, pwd, cur_opt);
-
-	/* FIXME the idea of checking to see if our connection is already persistent
-		is good, but it adds a lot of overhead to non-persistent connections.  We
-		should look and see if we can fix that somehow */
-	/* try to find if we already have this link in our persistent list,
-	 * no matter if it is to be persistent or not
-	 */
-
 try_and_get_another_connection:
 
 	if (persistent) {
+		char *hashed_details;
+		int hashed_len;
 		zend_resource *le;
+
+		hashed_len = spprintf(&hashed_details, 0, "%s_%s_%s_%s_%d", ODBC_TYPE, db, uid, pwd, cur_opt);
 
 		/* the link is not in the persistent list */
 		if ((le = zend_hash_str_find_ptr(&EG(persistent_list), hashed_details, hashed_len)) == NULL) {
@@ -2260,9 +2214,8 @@ try_and_get_another_connection:
 			db_conn->res = zend_register_resource(db_conn, le_pconn);
 			RETVAL_RES(db_conn->res);
 		} else { /* found connection */
-			if (le->type != le_pconn) {
-				RETURN_FALSE;
-			}
+			ZEND_ASSERT(le->type == le_pconn);
+
 			/*
 			 * check to see if the connection is still valid
 			 */
@@ -2293,50 +2246,22 @@ try_and_get_another_connection:
 				}
 			}
 		}
+		efree(hashed_details);
 		db_conn->res = zend_register_resource(db_conn, le_pconn);
 		RETVAL_RES(db_conn->res);
 	} else { /* non persistent */
-		zend_resource *index_ptr, new_index_ptr;
-
-		if ((index_ptr = zend_hash_str_find_ptr(&EG(regular_list), hashed_details, hashed_len)) != NULL) {
-			zend_ulong conn_id;
-			zend_resource *p;
-
-			if (index_ptr->type != le_index_ptr) {
-				RETURN_FALSE;
-			}
-			conn_id = (zend_ulong)index_ptr->ptr;
-			p = zend_hash_index_find_ptr(&EG(regular_list), conn_id);   /* check if the connection is still there */
-
-			if (p && p->ptr && (p->type == le_conn || p->type == le_pconn)) {
-				GC_ADDREF(p);
-				RETVAL_RES(p);
-				efree(hashed_details);
-				return;
-			} else {
-				zend_hash_str_del(&EG(regular_list), hashed_details, hashed_len);
-			}
-		}
 		if (ODBCG(max_links) != -1 && ODBCG(num_links) >= ODBCG(max_links)) {
 			php_error_docref(NULL, E_WARNING,"Too many open connections (%ld)",ODBCG(num_links));
-			efree(hashed_details);
 			RETURN_FALSE;
 		}
 
 		if (!odbc_sqlconnect(&db_conn, db, uid, pwd, cur_opt, 0)) {
-			efree(hashed_details);
 			RETURN_FALSE;
 		}
 		db_conn->res = zend_register_resource(db_conn, le_conn);
 		RETVAL_RES(db_conn->res);
-		new_index_ptr.ptr = (void *)(zend_uintptr_t)Z_RES_HANDLE_P(return_value);
-		new_index_ptr.type = le_index_ptr;
-
-		zend_hash_str_update_mem(&EG(regular_list), hashed_details, hashed_len, (void *) &new_index_ptr,
-				   sizeof(zend_resource));
 		ODBCG(num_links)++;
 	}
-	efree(hashed_details);
 }
 /* }}} */
 
@@ -2422,6 +2347,7 @@ PHP_FUNCTION(odbc_next_result)
 		}
 		efree(result->values);
 		result->values = NULL;
+		result->numcols = 0;
 	}
 
 	result->fetched = 0;
@@ -2483,6 +2409,11 @@ PHP_FUNCTION(odbc_field_name)
 		RETURN_THROWS();
 	}
 
+	if (pv_num < 1) {
+		zend_argument_value_error(2, "must be greater than 0");
+		RETURN_THROWS();
+	}
+
 	if (result->numcols == 0) {
 		php_error_docref(NULL, E_WARNING, "No tuples available at this result index");
 		RETURN_FALSE;
@@ -2490,11 +2421,6 @@ PHP_FUNCTION(odbc_field_name)
 
 	if (pv_num > result->numcols) {
 		php_error_docref(NULL, E_WARNING, "Field index larger than number of fields");
-		RETURN_FALSE;
-	}
-
-	if (pv_num < 1) {
-		php_error_docref(NULL, E_WARNING, "Field numbering starts at 1");
 		RETURN_FALSE;
 	}
 
@@ -2519,6 +2445,11 @@ PHP_FUNCTION(odbc_field_type)
 		RETURN_THROWS();
 	}
 
+	if (pv_num < 1) {
+		zend_argument_value_error(2, "must be greater than 0");
+		RETURN_THROWS();
+	}
+
 	if (result->numcols == 0) {
 		php_error_docref(NULL, E_WARNING, "No tuples available at this result index");
 		RETURN_FALSE;
@@ -2526,11 +2457,6 @@ PHP_FUNCTION(odbc_field_type)
 
 	if (pv_num > result->numcols) {
 		php_error_docref(NULL, E_WARNING, "Field index larger than number of fields");
-		RETURN_FALSE;
-	}
-
-	if (pv_num < 1) {
-		php_error_docref(NULL, E_WARNING, "Field numbering starts at 1");
 		RETURN_FALSE;
 	}
 
@@ -2643,14 +2569,14 @@ PHP_FUNCTION(odbc_rollback)
 static void php_odbc_lasterror(INTERNAL_FUNCTION_PARAMETERS, int mode)
 {
 	odbc_connection *conn;
-	zval *pv_handle;
+	zval *pv_handle = NULL;
 	char *ret;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|r", &pv_handle) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|r!", &pv_handle) == FAILURE) {
 		RETURN_THROWS();
 	}
 
-	if (ZEND_NUM_ARGS() == 1) {
+	if (pv_handle) {
 		if (!(conn = (odbc_connection *)zend_fetch_resource2(Z_RES_P(pv_handle), "ODBC-Link", le_conn, le_pconn))) {
 			RETURN_THROWS();
 		}
@@ -2733,9 +2659,8 @@ PHP_FUNCTION(odbc_setoption)
 			}
 			break;
 		default:
-			php_error_docref(NULL, E_WARNING, "Unknown option type");
-			RETURN_FALSE;
-			break;
+			zend_argument_value_error(2, "must be 1 for SQLSetConnectOption(), or 2 for SQLSetStmtOption()");
+			RETURN_THROWS();
 	}
 
 	RETURN_TRUE;
@@ -2756,7 +2681,7 @@ PHP_FUNCTION(odbc_tables)
 	size_t cat_len = 0, schema_len = 0, table_len = 0, type_len = 0;
 	RETCODE rc;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!sss", &pv_conn, &cat, &cat_len, &schema, &schema_len,
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!s!s!s!", &pv_conn, &cat, &cat_len, &schema, &schema_len,
 		&table, &table_len, &type, &type_len) == FAILURE) {
 		RETURN_THROWS();
 	}
@@ -2781,18 +2706,18 @@ PHP_FUNCTION(odbc_tables)
 	}
 
 	/* This hack is needed to access table information in Access databases (fmk) */
-	if (table && table_len && schema && schema_len == 0) {
+	if (schema && schema_len == 0 && table && table_len) {
 		schema = NULL;
 	}
 
 	rc = SQLTables(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema,	SAFE_SQL_NTS(schema),
-			table, SAFE_SQL_NTS(table),
-			type, SAFE_SQL_NTS(type));
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema,	SAFE_SQL_NTS(schema),
+			(SQLCHAR *) table, SAFE_SQL_NTS(table),
+			(SQLCHAR *) type, SAFE_SQL_NTS(type));
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLTables");
+		odbc_sql_error(conn, result->stmt, "SQLTables");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -2824,7 +2749,7 @@ PHP_FUNCTION(odbc_columns)
 	size_t cat_len = 0, schema_len = 0, table_len = 0, column_len = 0;
 	RETCODE rc;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!sss", &pv_conn, &cat, &cat_len, &schema, &schema_len,
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!s!s!s!", &pv_conn, &cat, &cat_len, &schema, &schema_len,
 		&table, &table_len, &column, &column_len) == FAILURE) {
 		RETURN_THROWS();
 	}
@@ -2856,13 +2781,13 @@ PHP_FUNCTION(odbc_columns)
 	}
 
 	rc = SQLColumns(result->stmt,
-			cat, (SQLSMALLINT) cat_len,
-			schema, (SQLSMALLINT) schema_len,
-			table, (SQLSMALLINT) table_len,
-			column, (SQLSMALLINT) column_len);
+			(SQLCHAR *) cat, (SQLSMALLINT) cat_len,
+			(SQLCHAR *) schema, (SQLSMALLINT) schema_len,
+			(SQLCHAR *) table, (SQLSMALLINT) table_len,
+			(SQLCHAR *) column, (SQLSMALLINT) column_len);
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLColumns");
+		odbc_sql_error(conn, result->stmt, "SQLColumns");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -2920,13 +2845,13 @@ PHP_FUNCTION(odbc_columnprivileges)
 	}
 
 	rc = SQLColumnPrivileges(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			table, SAFE_SQL_NTS(table),
-			column, SAFE_SQL_NTS(column));
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) table, SAFE_SQL_NTS(table),
+			(SQLCHAR *) column, SAFE_SQL_NTS(column));
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLColumnPrivileges");
+		odbc_sql_error(conn, result->stmt, "SQLColumnPrivileges");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -2997,15 +2922,15 @@ PHP_FUNCTION(odbc_foreignkeys)
 	}
 
 	rc = SQLForeignKeys(result->stmt,
-			pcat, SAFE_SQL_NTS(pcat),
-			pschema, SAFE_SQL_NTS(pschema),
-			ptable, SAFE_SQL_NTS(ptable),
-			fcat, SAFE_SQL_NTS(fcat),
-			fschema, SAFE_SQL_NTS(fschema),
-			ftable, SAFE_SQL_NTS(ftable) );
+			(SQLCHAR *) pcat, SAFE_SQL_NTS(pcat),
+			(SQLCHAR *) pschema, SAFE_SQL_NTS(pschema),
+			(SQLCHAR *) ptable, SAFE_SQL_NTS(ptable),
+			(SQLCHAR *) fcat, SAFE_SQL_NTS(fcat),
+			(SQLCHAR *) fschema, SAFE_SQL_NTS(fschema),
+			(SQLCHAR *) ftable, SAFE_SQL_NTS(ftable) );
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLForeignKeys");
+		odbc_sql_error(conn, result->stmt, "SQLForeignKeys");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3066,7 +2991,7 @@ PHP_FUNCTION(odbc_gettypeinfo)
 	rc = SQLGetTypeInfo(result->stmt, data_type );
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLGetTypeInfo");
+		odbc_sql_error(conn, result->stmt, "SQLGetTypeInfo");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3122,12 +3047,12 @@ PHP_FUNCTION(odbc_primarykeys)
 	}
 
 	rc = SQLPrimaryKeys(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			table, SAFE_SQL_NTS(table) );
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) table, SAFE_SQL_NTS(table) );
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLPrimaryKeys");
+		odbc_sql_error(conn, result->stmt, "SQLPrimaryKeys");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3160,11 +3085,7 @@ PHP_FUNCTION(odbc_procedurecolumns)
 	size_t cat_len = 0, schema_len = 0, proc_len = 0, col_len = 0;
 	RETCODE rc;
 
-	if (ZEND_NUM_ARGS() != 1 && ZEND_NUM_ARGS() != 5) {
-		WRONG_PARAM_COUNT;
-	}
-
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!sss", &pv_conn, &cat, &cat_len, &schema, &schema_len,
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!s!s!s!", &pv_conn, &cat, &cat_len, &schema, &schema_len,
 		&proc, &proc_len, &col, &col_len) == FAILURE) {
 		RETURN_THROWS();
 	}
@@ -3189,13 +3110,13 @@ PHP_FUNCTION(odbc_procedurecolumns)
 	}
 
 	rc = SQLProcedureColumns(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			proc, SAFE_SQL_NTS(proc),
-			col, SAFE_SQL_NTS(col) );
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) proc, SAFE_SQL_NTS(proc),
+			(SQLCHAR *) col, SAFE_SQL_NTS(col) );
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLProcedureColumns");
+		odbc_sql_error(conn, result->stmt, "SQLProcedureColumns");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3229,11 +3150,7 @@ PHP_FUNCTION(odbc_procedures)
 	size_t cat_len = 0, schema_len = 0, proc_len = 0;
 	RETCODE rc;
 
-	if (ZEND_NUM_ARGS() != 1 && ZEND_NUM_ARGS() != 4) {
-		WRONG_PARAM_COUNT;
-	}
-
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!ss", &pv_conn, &cat, &cat_len, &schema, &schema_len, &proc, &proc_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "r|s!s!s!", &pv_conn, &cat, &cat_len, &schema, &schema_len, &proc, &proc_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -3257,12 +3174,12 @@ PHP_FUNCTION(odbc_procedures)
 	}
 
 	rc = SQLProcedures(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			proc, SAFE_SQL_NTS(proc) );
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) proc, SAFE_SQL_NTS(proc) );
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLProcedures");
+		odbc_sql_error(conn, result->stmt, "SQLProcedures");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3297,7 +3214,7 @@ PHP_FUNCTION(odbc_specialcolumns)
 	SQLUSMALLINT type, scope, nullable;
 	RETCODE rc;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "rls!ssl", &pv_conn, &vtype, &cat, &cat_len, &schema, &schema_len,
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "rls!ssll", &pv_conn, &vtype, &cat, &cat_len, &schema, &schema_len,
 		&name, &name_len, &vscope, &vnullable) == FAILURE) {
 		RETURN_THROWS();
 	}
@@ -3325,16 +3242,15 @@ PHP_FUNCTION(odbc_specialcolumns)
 		RETURN_FALSE;
 	}
 
-	rc = SQLSpecialColumns(result->stmt,
-			type,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			name, SAFE_SQL_NTS(name),
+	rc = SQLSpecialColumns(result->stmt, type,
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) name, SAFE_SQL_NTS(name),
 			scope,
 			nullable);
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLSpecialColumns");
+		odbc_sql_error(conn, result->stmt, "SQLSpecialColumns");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3396,14 +3312,14 @@ PHP_FUNCTION(odbc_statistics)
 	}
 
 	rc = SQLStatistics(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			name, SAFE_SQL_NTS(name),
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) name, SAFE_SQL_NTS(name),
 			unique,
 			reserved);
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLStatistics");
+		odbc_sql_error(conn, result->stmt, "SQLStatistics");
 		efree(result);
 		RETURN_FALSE;
 	}
@@ -3460,12 +3376,12 @@ PHP_FUNCTION(odbc_tableprivileges)
 	}
 
 	rc = SQLTablePrivileges(result->stmt,
-			cat, SAFE_SQL_NTS(cat),
-			schema, SAFE_SQL_NTS(schema),
-			table, SAFE_SQL_NTS(table));
+			(SQLCHAR *) cat, SAFE_SQL_NTS(cat),
+			(SQLCHAR *) schema, SAFE_SQL_NTS(schema),
+			(SQLCHAR *) table, SAFE_SQL_NTS(table));
 
 	if (rc == SQL_ERROR) {
-		odbc_sql_error(conn, SQL_NULL_HSTMT, "SQLTablePrivileges");
+		odbc_sql_error(conn, result->stmt, "SQLTablePrivileges");
 		efree(result);
 		RETURN_FALSE;
 	}

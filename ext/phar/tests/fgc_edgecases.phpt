@@ -52,7 +52,7 @@ include $pname . '/foo/hi';
 <?php unlink(__DIR__ . '/' . basename(__FILE__, '.clean.php') . '.phar.php'); ?>
 <?php unlink(__DIR__ . '/fgc_edgecases.txt'); ?>
 --EXPECTF--
-file_get_contents(): Argument #1 ($filename) must be a valid path, array given
+file_get_contents(): Argument #1 ($filename) must be of type string, array given
 blah
 <?php
 echo file_get_contents("foo/" . basename(__FILE__));
@@ -71,7 +71,7 @@ echo file_get_contents("./hi", 0, $context, 50000);
 echo file_get_contents("./hi");
 echo file_get_contents("./hi", 0, $context, 0, 0);
 ?>
-file_get_contents(): Argument #5 ($maxlen) must be greater than or equal to 0
+file_get_contents(): Argument #5 ($length) must be greater than or equal to 0
 test
 test
 <?php

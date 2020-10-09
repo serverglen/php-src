@@ -299,11 +299,7 @@ static php_stream_filter *user_filter_factory_create(const char *filtername,
 			}
 			efree(wildcard);
 		}
-		if (fdat == NULL) {
-			php_error_docref(NULL, E_WARNING,
-					"Err, filter \"%s\" is not in the user-filter map, but somehow the user-filter-factory was invoked for it!?", filtername);
-			return NULL;
-		}
+		ZEND_ASSERT(fdat);
 	}
 
 	/* bind the classname to the actual class */
@@ -429,7 +425,7 @@ static void php_stream_bucket_attach(int append, INTERNAL_FUNCTION_PARAMETERS)
 		Z_PARAM_OBJECT(zobject)
 	ZEND_PARSE_PARAMETERS_END();
 
-	if (NULL == (pzbucket = zend_hash_str_find(Z_OBJPROP_P(zobject), "bucket", sizeof("bucket")-1))) {
+	if (NULL == (pzbucket = zend_hash_str_find_deref(Z_OBJPROP_P(zobject), "bucket", sizeof("bucket")-1))) {
 		zend_argument_value_error(2, "must be an object that has a \"bucket\" property");
 		RETURN_THROWS();
 	}
@@ -443,7 +439,7 @@ static void php_stream_bucket_attach(int append, INTERNAL_FUNCTION_PARAMETERS)
 		RETURN_THROWS();
 	}
 
-	if (NULL != (pzdata = zend_hash_str_find(Z_OBJPROP_P(zobject), "data", sizeof("data")-1)) && Z_TYPE_P(pzdata) == IS_STRING) {
+	if (NULL != (pzdata = zend_hash_str_find_deref(Z_OBJPROP_P(zobject), "data", sizeof("data")-1)) && Z_TYPE_P(pzdata) == IS_STRING) {
 		if (!bucket->own_buf) {
 			bucket = php_stream_bucket_make_writeable(bucket);
 		}
@@ -503,10 +499,6 @@ PHP_FUNCTION(stream_bucket_new)
 	memcpy(pbuffer, buffer, buffer_len);
 
 	bucket = php_stream_bucket_new(stream, pbuffer, buffer_len, 1, php_stream_is_persistent(stream));
-
-	if (bucket == NULL) {
-		RETURN_FALSE;
-	}
 
 	ZVAL_RES(&zbucket, zend_register_resource(bucket, le_bucket));
 	object_init(return_value);

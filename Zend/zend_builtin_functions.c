@@ -57,7 +57,7 @@ zend_module_entry zend_builtin_module = { /* {{{ */
 };
 /* }}} */
 
-int zend_startup_builtin_functions(void) /* {{{ */
+zend_result zend_startup_builtin_functions(void) /* {{{ */
 {
 	zend_builtin_module.module_number = 0;
 	zend_builtin_module.type = MODULE_PERSISTENT;
@@ -420,9 +420,9 @@ ZEND_FUNCTION(error_reporting)
 }
 /* }}} */
 
-static int validate_constant_array_argument(HashTable *ht, int argument_number) /* {{{ */
+static bool validate_constant_array_argument(HashTable *ht, int argument_number) /* {{{ */
 {
-	int ret = 1;
+	bool ret = 1;
 	zval *val;
 
 	GC_PROTECT_RECURSION(ht);
@@ -616,7 +616,7 @@ ZEND_FUNCTION(get_parent_class)
 
 	ZEND_PARSE_PARAMETERS_START(0, 1)
 		Z_PARAM_OPTIONAL
-		Z_PARAM_CLASS_NAME_OR_OBJ(ce)
+		Z_PARAM_OBJ_OR_CLASS_NAME(ce)
 	ZEND_PARSE_PARAMETERS_END();
 
 	if (!ce) {
@@ -698,7 +698,7 @@ ZEND_FUNCTION(is_a)
 /* }}} */
 
 /* {{{ add_class_vars */
-static void add_class_vars(zend_class_entry *scope, zend_class_entry *ce, int statics, zval *return_value)
+static void add_class_vars(zend_class_entry *scope, zend_class_entry *ce, bool statics, zval *return_value)
 {
 	zend_property_info *prop_info;
 	zval *prop, prop_copy;
@@ -747,27 +747,22 @@ static void add_class_vars(zend_class_entry *scope, zend_class_entry *ce, int st
 /* {{{ Returns an array of default properties of the class. */
 ZEND_FUNCTION(get_class_vars)
 {
-	zend_string *class_name;
-	zend_class_entry *ce, *scope;
+	zend_class_entry *ce = NULL, *scope;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "S", &class_name) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "C", &ce) == FAILURE) {
 		RETURN_THROWS();
 	}
 
-	ce = zend_lookup_class(class_name);
-	if (!ce) {
-		RETURN_FALSE;
-	} else {
-		array_init(return_value);
-		if (UNEXPECTED(!(ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED))) {
-			if (UNEXPECTED(zend_update_class_constants(ce) != SUCCESS)) {
-				return;
-			}
+	array_init(return_value);
+	if (UNEXPECTED(!(ce->ce_flags & ZEND_ACC_CONSTANTS_UPDATED))) {
+		if (UNEXPECTED(zend_update_class_constants(ce) != SUCCESS)) {
+			return;
 		}
-		scope = zend_get_executed_scope();
-		add_class_vars(scope, ce, 0, return_value);
-		add_class_vars(scope, ce, 1, return_value);
 	}
+
+	scope = zend_get_executed_scope();
+	add_class_vars(scope, ce, 0, return_value);
+	add_class_vars(scope, ce, 1, return_value);
 }
 /* }}} */
 
@@ -865,10 +860,10 @@ ZEND_FUNCTION(get_mangled_object_vars)
 }
 /* }}} */
 
-static int same_name(zend_string *key, zend_string *name) /* {{{ */
+static bool same_name(zend_string *key, zend_string *name) /* {{{ */
 {
 	zend_string *lcname;
-	int ret;
+	bool ret;
 
 	if (key == name) {
 		return 1;
@@ -892,7 +887,7 @@ ZEND_FUNCTION(get_class_methods)
 	zend_function *mptr;
 
 	ZEND_PARSE_PARAMETERS_START(1, 1)
-		Z_PARAM_CLASS_NAME_OR_OBJ(ce)
+		Z_PARAM_OBJ_OR_CLASS_NAME(ce)
 	ZEND_PARSE_PARAMETERS_END();
 
 	array_init(return_value);
@@ -1786,13 +1781,12 @@ ZEND_FUNCTION(debug_print_backtrace)
 		} else {
 			/* i know this is kinda ugly, but i'm trying to avoid extra cycles in the main execution loop */
 			zend_bool build_filename_arg = 1;
+			uint32_t include_kind = 0;
+			if (ptr->func && ZEND_USER_CODE(ptr->func->common.type) && ptr->opline->opcode == ZEND_INCLUDE_OR_EVAL) {
+				include_kind = ptr->opline->extended_value;
+			}
 
-			if (!ptr->func || !ZEND_USER_CODE(ptr->func->common.type) || ptr->opline->opcode != ZEND_INCLUDE_OR_EVAL) {
-				/* can happen when calling eval from a custom sapi */
-				function_name = "unknown";
-				build_filename_arg = 0;
-			} else
-			switch (ptr->opline->extended_value) {
+			switch (include_kind) {
 				case ZEND_EVAL:
 					function_name = "eval";
 					build_filename_arg = 0;
@@ -1810,8 +1804,11 @@ ZEND_FUNCTION(debug_print_backtrace)
 					function_name = "require_once";
 					break;
 				default:
-					/* this can actually happen if you use debug_backtrace() in your error_handler and
-					 * you're in the top-scope */
+					/* Skip dummy frame unless it is needed to preserve filename/lineno info. */
+					if (!filename) {
+						goto skip_frame;
+					}
+
 					function_name = "unknown";
 					build_filename_arg = 0;
 					break;
@@ -1862,10 +1859,12 @@ ZEND_FUNCTION(debug_print_backtrace)
 				ZEND_PUTS(")\n");
 			}
 		}
+		++indent;
+
+skip_frame:
 		include_filename = filename;
 		call = skip;
 		ptr = skip->prev_execute_data;
-		++indent;
 	}
 }
 
@@ -2014,13 +2013,12 @@ ZEND_API void zend_fetch_debug_backtrace(zval *return_value, int skip_last, int 
 			/* i know this is kinda ugly, but i'm trying to avoid extra cycles in the main execution loop */
 			zend_bool build_filename_arg = 1;
 			zend_string *pseudo_function_name;
+			uint32_t include_kind = 0;
+			if (ptr->func && ZEND_USER_CODE(ptr->func->common.type) && ptr->opline->opcode == ZEND_INCLUDE_OR_EVAL) {
+				include_kind = ptr->opline->extended_value;
+			}
 
-			if (!ptr->func || !ZEND_USER_CODE(ptr->func->common.type) || ptr->opline->opcode != ZEND_INCLUDE_OR_EVAL) {
-				/* can happen when calling eval from a custom sapi */
-				pseudo_function_name = ZSTR_KNOWN(ZEND_STR_UNKNOWN);
-				build_filename_arg = 0;
-			} else
-			switch (ptr->opline->extended_value) {
+			switch (include_kind) {
 				case ZEND_EVAL:
 					pseudo_function_name = ZSTR_KNOWN(ZEND_STR_EVAL);
 					build_filename_arg = 0;
@@ -2038,8 +2036,12 @@ ZEND_API void zend_fetch_debug_backtrace(zval *return_value, int skip_last, int 
 					pseudo_function_name = ZSTR_KNOWN(ZEND_STR_REQUIRE_ONCE);
 					break;
 				default:
-					/* this can actually happen if you use debug_backtrace() in your error_handler and
-					 * you're in the top-scope */
+					/* Skip dummy frame unless it is needed to preserve filename/lineno info. */
+					if (!filename) {
+						zval_ptr_dtor(&stack_frame);
+						goto skip_frame;
+					}
+
 					pseudo_function_name = ZSTR_KNOWN(ZEND_STR_UNKNOWN);
 					build_filename_arg = 0;
 					break;
@@ -2065,8 +2067,8 @@ ZEND_API void zend_fetch_debug_backtrace(zval *return_value, int skip_last, int 
 
 		zend_hash_next_index_insert_new(Z_ARRVAL_P(return_value), &stack_frame);
 
+skip_frame:
 		include_filename = filename;
-
 		call = skip;
 		ptr = skip->prev_execute_data;
 	}
@@ -2112,7 +2114,7 @@ ZEND_FUNCTION(get_extension_funcs)
 {
 	zend_string *extension_name;
 	zend_string *lcname;
-	int array;
+	bool array;
 	zend_module_entry *module;
 	zend_function *zif;
 

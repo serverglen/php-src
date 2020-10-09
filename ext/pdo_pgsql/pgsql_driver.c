@@ -559,15 +559,15 @@ PHP_METHOD(PDO_PGSql_Ext, pgsqlCopyFromArray)
 	PGresult *pgsql_result;
 	ExecStatusType status;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "sa|sss",
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "sa|sss!",
 					&table_name, &table_name_len, &pg_rows,
 					&pg_delim, &pg_delim_len, &pg_null_as, &pg_null_as_len, &pg_fields, &pg_fields_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
 	if (!zend_hash_num_elements(Z_ARRVAL_P(pg_rows))) {
-		php_error_docref(NULL, E_WARNING, "Cannot copy from an empty array");
-		RETURN_FALSE;
+		zend_argument_value_error(2, "cannot be empty");
+		RETURN_THROWS();
 	}
 
 	dbh = Z_PDO_DBH_P(ZEND_THIS);
@@ -670,7 +670,7 @@ PHP_METHOD(PDO_PGSql_Ext, pgsqlCopyFromFile)
 	ExecStatusType status;
 	php_stream *stream;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "sp|sss",
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "sp|sss!",
 				&table_name, &table_name_len, &filename, &filename_len,
 				&pg_delim, &pg_delim_len, &pg_null_as, &pg_null_as_len, &pg_fields, &pg_fields_len) == FAILURE) {
 		RETURN_THROWS();
@@ -770,7 +770,7 @@ PHP_METHOD(PDO_PGSql_Ext, pgsqlCopyToFile)
 
 	php_stream *stream;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "sp|sss",
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "sp|sss!",
 					&table_name, &table_name_len, &filename, &filename_len,
 					&pg_delim, &pg_delim_len, &pg_null_as, &pg_null_as_len, &pg_fields, &pg_fields_len) == FAILURE) {
 		RETURN_THROWS();
@@ -862,7 +862,7 @@ PHP_METHOD(PDO_PGSql_Ext, pgsqlCopyToArray)
 	PGresult *pgsql_result;
 	ExecStatusType status;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "s|sss",
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "s|sss!",
 		&table_name, &table_name_len,
 		&pg_delim, &pg_delim_len, &pg_null_as, &pg_null_as_len, &pg_fields, &pg_fields_len) == FAILURE) {
 		RETURN_THROWS();
@@ -1061,13 +1061,13 @@ PHP_METHOD(PDO_PGSql_Ext, pgsqlGetNotify)
 	}
 
 	if (result_type != PDO_FETCH_BOTH && result_type != PDO_FETCH_ASSOC && result_type != PDO_FETCH_NUM) {
-		php_error_docref(NULL, E_WARNING, "Invalid result type");
- 		RETURN_FALSE;
+		zend_argument_value_error(1, "must be one of PDO::FETCH_BOTH, PDO::FETCH_ASSOC, or PDO::FETCH_NUM");
+		RETURN_THROWS();
 	}
 
 	if (ms_timeout < 0) {
-		php_error_docref(NULL, E_WARNING, "Invalid timeout");
- 		RETURN_FALSE;
+		zend_argument_value_error(2, "must be greater than or equal to 0");
+		RETURN_THROWS();
 #ifdef ZEND_ENABLE_ZVAL_LONG64
 	} else if (ms_timeout > INT_MAX) {
 		php_error_docref(NULL, E_WARNING, "Timeout was shrunk to %d", INT_MAX);
@@ -1191,6 +1191,11 @@ static int pdo_pgsql_handle_factory(pdo_dbh_t *dbh, zval *driver_options) /* {{{
 
 	H = pecalloc(1, sizeof(pdo_pgsql_db_handle), dbh->is_persistent);
 	dbh->driver_data = H;
+
+	dbh->skip_param_evt =
+		1 << PDO_PARAM_EVT_EXEC_POST |
+		1 << PDO_PARAM_EVT_FETCH_PRE |
+		1 << PDO_PARAM_EVT_FETCH_POST;
 
 	H->einfo.errcode = 0;
 	H->einfo.errmsg = NULL;

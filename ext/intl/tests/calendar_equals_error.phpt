@@ -5,7 +5,7 @@ date.timezone=Atlantic/Azores
 --SKIPIF--
 <?php
 if (!extension_loaded('intl'))
-	die('skip intl extension not enabled');
+    die('skip intl extension not enabled');
 --FILE--
 <?php
 ini_set("intl.error_level", E_WARNING);
@@ -46,11 +46,11 @@ try {
 }
 ?>
 --EXPECT--
-error: 0, IntlCalendar::equals() expects exactly 1 parameter, 0 given
+error: 0, IntlCalendar::equals() expects exactly 1 argument, 0 given
 
 error: 0, IntlCalendar::equals(): Argument #1 ($calendar) must be of type IntlCalendar, stdClass given
 
-error: 0, IntlCalendar::equals() expects exactly 1 parameter, 2 given
+error: 0, IntlCalendar::equals() expects exactly 1 argument, 2 given
 
 error: 0, intlcal_equals(): Argument #2 ($calendar) must be of type IntlCalendar, array given
 

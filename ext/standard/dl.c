@@ -54,7 +54,7 @@ PHPAPI PHP_FUNCTION(dl)
 	}
 
 	if (filename_len >= MAXPATHLEN) {
-		php_error_docref(NULL, E_WARNING, "File name exceeds the maximum allowed length of %d characters", MAXPATHLEN);
+		php_error_docref(NULL, E_WARNING, "Filename exceeds the maximum allowed length of %d characters", MAXPATHLEN);
 		RETURN_FALSE;
 	}
 
@@ -161,18 +161,16 @@ PHPAPI int php_load_extension(const char *filename, int type, int start_now)
 		efree(orig_libpath);
 		efree(err1);
 	}
+	efree(libpath);
 
 #ifdef PHP_WIN32
-	if (!php_win32_image_compatible(libpath, &err1)) {
+	if (!php_win32_image_compatible(handle, &err1)) {
 			php_error_docref(NULL, error_type, err1);
 			efree(err1);
-			efree(libpath);
 			DL_UNLOAD(handle);
 			return FAILURE;
 	}
 #endif
-
-	efree(libpath);
 
 	get_module = (zend_module_entry *(*)(void)) DL_FETCH_SYMBOL(handle, "get_module");
 

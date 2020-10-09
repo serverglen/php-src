@@ -438,7 +438,7 @@ PHP_FUNCTION(phpdbg_color)
 		break;
 
 		default:
-			zend_argument_value_error(1, "must be either PHPDBG_COLOR_PROMPT, PHPDBG_COLOR_NOTICE, or PHPDBG_COLOR_ERROR");
+			zend_argument_value_error(1, "must be one of PHPDBG_COLOR_PROMPT, PHPDBG_COLOR_NOTICE, or PHPDBG_COLOR_ERROR");
 	}
 } /* }}} */
 
@@ -482,7 +482,8 @@ static zend_always_inline zend_bool phpdbg_is_ignored_opcode(zend_uchar opcode) 
 	 || opcode == ZEND_DECLARE_CONST || opcode == ZEND_DECLARE_CLASS || opcode == ZEND_DECLARE_FUNCTION
 	 || opcode == ZEND_DECLARE_CLASS_DELAYED
 	 || opcode == ZEND_DECLARE_ANON_CLASS || opcode == ZEND_FAST_RET || opcode == ZEND_TICKS
-	 || opcode == ZEND_EXT_STMT || opcode == ZEND_EXT_FCALL_BEGIN || opcode == ZEND_EXT_FCALL_END || opcode == ZEND_EXT_NOP || opcode == ZEND_BIND_GLOBAL
+	 || opcode == ZEND_EXT_STMT || opcode == ZEND_EXT_FCALL_BEGIN || opcode == ZEND_EXT_FCALL_END
+	 || opcode == ZEND_BIND_GLOBAL
 	;
 }
 
@@ -798,32 +799,25 @@ static void php_sapi_phpdbg_log_message(const char *message, int syslog_type_int
 			return;
 		}
 
-		switch (PG(last_error_type)) {
-			case E_ERROR:
-			case E_CORE_ERROR:
-			case E_COMPILE_ERROR:
-			case E_USER_ERROR:
-			case E_PARSE:
-			case E_RECOVERABLE_ERROR: {
-				const char *file_char = zend_get_executed_filename();
-				zend_string *file = zend_string_init(file_char, strlen(file_char), 0);
-				phpdbg_list_file(file, 3, zend_get_executed_lineno() - 1, zend_get_executed_lineno());
-				zend_string_release(file);
+		if (PG(last_error_type) & E_FATAL_ERRORS) {
+			const char *file_char = zend_get_executed_filename();
+			zend_string *file = zend_string_init(file_char, strlen(file_char), 0);
+			phpdbg_list_file(file, 3, zend_get_executed_lineno() - 1, zend_get_executed_lineno());
+			zend_string_release(file);
 
-				if (!phpdbg_fully_started) {
-					return;
-				}
-
-				do {
-					switch (phpdbg_interactive(1, NULL)) {
-						case PHPDBG_LEAVE:
-						case PHPDBG_FINISH:
-						case PHPDBG_UNTIL:
-						case PHPDBG_NEXT:
-							return;
-					}
-				} while (!(PHPDBG_G(flags) & PHPDBG_IS_STOPPING));
+			if (!phpdbg_fully_started) {
+				return;
 			}
+
+			do {
+				switch (phpdbg_interactive(1, NULL)) {
+					case PHPDBG_LEAVE:
+					case PHPDBG_FINISH:
+					case PHPDBG_UNTIL:
+					case PHPDBG_NEXT:
+						return;
+				}
+			} while (!(PHPDBG_G(flags) & PHPDBG_IS_STOPPING));
 		}
 	} else {
 		fprintf(stdout, "%s\n", message);

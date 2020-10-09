@@ -33,6 +33,7 @@
 #include "zend_smart_string.h"
 #include "zend_cpuinfo.h"
 #include "zend_attributes.h"
+#include "zend_observer.h"
 
 static size_t global_map_ptr_last = 0;
 
@@ -61,8 +62,6 @@ ZEND_TSRMLS_CACHE_DEFINE()
 ZEND_API zend_utility_values zend_uv;
 ZEND_API zend_bool zend_dtrace_enabled;
 
-zend_llist zend_error_notify_callbacks;
-
 /* version information */
 static char *zend_version_info;
 static uint32_t zend_version_info_length;
@@ -74,7 +73,7 @@ ZEND_API zend_class_entry *zend_standard_class_def = NULL;
 ZEND_API size_t (*zend_printf)(const char *format, ...);
 ZEND_API zend_write_func_t zend_write;
 ZEND_API FILE *(*zend_fopen)(const char *filename, zend_string **opened_path);
-ZEND_API int (*zend_stream_open_function)(const char *filename, zend_file_handle *handle);
+ZEND_API zend_result (*zend_stream_open_function)(const char *filename, zend_file_handle *handle);
 ZEND_API void (*zend_ticks_function)(int ticks);
 ZEND_API void (*zend_interrupt_function)(zend_execute_data *execute_data);
 ZEND_API void (*zend_error_cb)(int type, const char *error_filename, const uint32_t error_lineno, zend_string *message);
@@ -82,9 +81,9 @@ void (*zend_printf_to_smart_string)(smart_string *buf, const char *format, va_li
 void (*zend_printf_to_smart_str)(smart_str *buf, const char *format, va_list ap);
 ZEND_API char *(*zend_getenv)(const char *name, size_t name_len);
 ZEND_API zend_string *(*zend_resolve_path)(const char *filename, size_t filename_len);
-ZEND_API int (*zend_post_startup_cb)(void) = NULL;
+ZEND_API zend_result (*zend_post_startup_cb)(void) = NULL;
 ZEND_API void (*zend_post_shutdown_cb)(void) = NULL;
-ZEND_API int (*zend_preload_autoload)(zend_string *filename) = NULL;
+ZEND_API zend_result (*zend_preload_autoload)(zend_string *filename) = NULL;
 
 /* This callback must be signal handler safe! */
 void (*zend_on_timeout)(int seconds);
@@ -365,7 +364,7 @@ static void print_flat_hash(HashTable *ht) /* {{{ */
 }
 /* }}} */
 
-ZEND_API int zend_make_printable_zval(zval *expr, zval *expr_copy) /* {{{ */
+ZEND_API bool zend_make_printable_zval(zval *expr, zval *expr_copy) /* {{{ */
 {
 	if (Z_TYPE_P(expr) == IS_STRING) {
 		return 0;
@@ -405,9 +404,7 @@ ZEND_API void zend_print_flat_zval_r(zval *expr) /* {{{ */
 			}
 			print_flat_hash(Z_ARRVAL_P(expr));
 			ZEND_PUTS(")");
-			if (!(GC_FLAGS(Z_ARRVAL_P(expr)) & GC_IMMUTABLE)) {
-				GC_UNPROTECT_RECURSION(Z_ARRVAL_P(expr));
-			}
+			GC_TRY_UNPROTECT_RECURSION(Z_ARRVAL_P(expr));
 			break;
 		case IS_OBJECT:
 		{
@@ -453,9 +450,7 @@ static void zend_print_zval_r_to_buf(smart_str *buf, zval *expr, int indent) /* 
 				GC_PROTECT_RECURSION(Z_ARRVAL_P(expr));
 			}
 			print_hash(buf, Z_ARRVAL_P(expr), indent, 0);
-			if (!(GC_FLAGS(Z_ARRVAL_P(expr)) & GC_IMMUTABLE)) {
-				GC_UNPROTECT_RECURSION(Z_ARRVAL_P(expr));
-			}
+			GC_TRY_UNPROTECT_RECURSION(Z_ARRVAL_P(expr));
 			break;
 		case IS_OBJECT:
 			{
@@ -757,9 +752,8 @@ static void executor_globals_dtor(zend_executor_globals *executor_globals) /* {{
 
 static void zend_new_thread_end_handler(THREAD_T thread_id) /* {{{ */
 {
-	if (zend_copy_ini_directives() == SUCCESS) {
-		zend_ini_refresh_caches(ZEND_INI_STAGE_STARTUP);
-	}
+	zend_copy_ini_directives();
+	zend_ini_refresh_caches(ZEND_INI_STAGE_STARTUP);
 }
 /* }}} */
 #endif
@@ -803,7 +797,7 @@ static zend_bool php_auto_globals_create_globals(zend_string *name) /* {{{ */
 }
 /* }}} */
 
-int zend_startup(zend_utility_functions *utility_functions) /* {{{ */
+void zend_startup(zend_utility_functions *utility_functions) /* {{{ */
 {
 #ifdef ZTS
 	zend_compiler_globals *compiler_globals;
@@ -832,7 +826,6 @@ int zend_startup(zend_utility_functions *utility_functions) /* {{{ */
 
 	zend_startup_strtod();
 	zend_startup_extensions_mechanism();
-	zend_startup_error_notify_callbacks();
 
 	/* Set up utility functions and values */
 	zend_error_cb = utility_functions->error_function;
@@ -865,7 +858,7 @@ int zend_startup(zend_utility_functions *utility_functions) /* {{{ */
 			zend_execute_ex = dtrace_execute_ex;
 			zend_execute_internal = dtrace_execute_internal;
 
-			zend_register_error_notify_callback(dtrace_error_notify_cb);
+			zend_observer_error_register(dtrace_error_notify_cb);
 		} else {
 			zend_compile_file = compile_file;
 			zend_execute_ex = execute_ex;
@@ -969,8 +962,6 @@ int zend_startup(zend_utility_functions *utility_functions) /* {{{ */
 	tsrm_set_new_thread_end_handler(zend_new_thread_end_handler);
 	tsrm_set_shutdown_handler(zend_interned_strings_dtor);
 #endif
-
-	return SUCCESS;
 }
 /* }}} */
 
@@ -1021,7 +1012,7 @@ static void zend_resolve_property_types(void) /* {{{ */
 /* Unlink the global (r/o) copies of the class, function and constant tables,
  * and use a fresh r/w copy for the startup thread
  */
-int zend_post_startup(void) /* {{{ */
+zend_result zend_post_startup(void) /* {{{ */
 {
 #ifdef ZTS
 	zend_encoding **script_encoding_list;
@@ -1033,7 +1024,7 @@ int zend_post_startup(void) /* {{{ */
 	zend_resolve_property_types();
 
 	if (zend_post_startup_cb) {
-		int (*cb)(void) = zend_post_startup_cb;
+		zend_result (*cb)(void) = zend_post_startup_cb;
 
 		zend_post_startup_cb = NULL;
 		if (cb() != SUCCESS) {
@@ -1095,7 +1086,6 @@ void zend_shutdown(void) /* {{{ */
 	zend_hash_destroy(GLOBAL_AUTO_GLOBALS_TABLE);
 	free(GLOBAL_AUTO_GLOBALS_TABLE);
 
-	zend_shutdown_error_notify_callbacks();
 	zend_shutdown_extensions();
 	free(zend_version_info);
 
@@ -1208,6 +1198,7 @@ ZEND_API void zend_activate(void) /* {{{ */
 	if (CG(map_ptr_last)) {
 		memset(ZEND_MAP_PTR_REAL_BASE(CG(map_ptr_base)), 0, CG(map_ptr_last) * sizeof(void*));
 	}
+	zend_observer_activate();
 }
 /* }}} */
 
@@ -1223,6 +1214,8 @@ ZEND_API void zend_deactivate(void) /* {{{ */
 {
 	/* we're no longer executing anything */
 	EG(current_execute_data) = NULL;
+
+	zend_observer_deactivate();
 
 	zend_try {
 		shutdown_scanner();
@@ -1310,34 +1303,25 @@ static ZEND_COLD void zend_error_impl(
 		zend_execute_data *ex;
 		const zend_op *opline;
 
-		switch (type) {
-			case E_CORE_ERROR:
-			case E_ERROR:
-			case E_RECOVERABLE_ERROR:
-			case E_PARSE:
-			case E_COMPILE_ERROR:
-			case E_USER_ERROR:
-				ex = EG(current_execute_data);
-				opline = NULL;
-				while (ex && (!ex->func || !ZEND_USER_CODE(ex->func->type))) {
-					ex = ex->prev_execute_data;
-				}
-				if (ex && ex->opline->opcode == ZEND_HANDLE_EXCEPTION &&
-				    EG(opline_before_exception)) {
-					opline = EG(opline_before_exception);
-				}
-				zend_exception_error(EG(exception), E_WARNING);
-				EG(exception) = NULL;
-				if (opline) {
-					ex->opline = opline;
-				}
-				break;
-			default:
-				break;
+		if (type & E_FATAL_ERRORS) {
+			ex = EG(current_execute_data);
+			opline = NULL;
+			while (ex && (!ex->func || !ZEND_USER_CODE(ex->func->type))) {
+				ex = ex->prev_execute_data;
+			}
+			if (ex && ex->opline->opcode == ZEND_HANDLE_EXCEPTION &&
+			    EG(opline_before_exception)) {
+				opline = EG(opline_before_exception);
+			}
+			zend_exception_error(EG(exception), E_WARNING);
+			EG(exception) = NULL;
+			if (opline) {
+				ex->opline = opline;
+			}
 		}
 	}
 
-	zend_error_notify_all_callbacks(type, error_filename, error_lineno, message);
+	zend_observer_error_notify(type, error_filename, error_lineno, message);
 
 	/* if we don't have a user defined error handler */
 	if (Z_TYPE(EG(user_error_handler)) == IS_UNDEF
@@ -1665,13 +1649,13 @@ ZEND_API ZEND_COLD void zend_user_exception_handler(void) /* {{{ */
 	}
 } /* }}} */
 
-ZEND_API int zend_execute_scripts(int type, zval *retval, int file_count, ...) /* {{{ */
+ZEND_API zend_result zend_execute_scripts(int type, zval *retval, int file_count, ...) /* {{{ */
 {
 	va_list files;
 	int i;
 	zend_file_handle *file_handle;
 	zend_op_array *op_array;
-	int ret = SUCCESS;
+	zend_result ret = SUCCESS;
 
 	va_start(files, file_count);
 	for (i = 0; i < file_count; i++) {
@@ -1798,31 +1782,5 @@ ZEND_API void zend_map_ptr_extend(size_t last)
 		ptr = (void**)ZEND_MAP_PTR_REAL_BASE(CG(map_ptr_base)) + CG(map_ptr_last);
 		memset(ptr, 0, (last - CG(map_ptr_last)) * sizeof(void*));
 		CG(map_ptr_last) = last;
-	}
-}
-
-void zend_startup_error_notify_callbacks(void)
-{
-	zend_llist_init(&zend_error_notify_callbacks, sizeof(zend_error_notify_cb), NULL, 1);
-}
-
-void zend_shutdown_error_notify_callbacks(void)
-{
-	zend_llist_destroy(&zend_error_notify_callbacks);
-}
-
-ZEND_API void zend_register_error_notify_callback(zend_error_notify_cb cb)
-{
-	zend_llist_add_element(&zend_error_notify_callbacks, &cb);
-}
-
-void zend_error_notify_all_callbacks(int type, const char *error_filename, uint32_t error_lineno, zend_string *message)
-{
-	zend_llist_element *element;
-	zend_error_notify_cb callback;
-
-	for (element = zend_error_notify_callbacks.head; element; element = element->next) {
-		callback = *(zend_error_notify_cb *) (element->data);
-		callback(type, error_filename, error_lineno, message);
 	}
 }

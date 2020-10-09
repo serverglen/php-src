@@ -15,8 +15,8 @@ $jis = base64_decode('GyRCRnxLXDhsJUYlLSU5JUgkRyQ5ISMbKEIwMTIzNBskQiM1IzYjNyM4Iz
 // EUC-JP string
 $euc_jp = '日本語テキストです。01234５６７８９。';
 
-// Test with sigle "form encoding"
-// Note: For some reason it complains, results are differ. Not reserched.
+// Test with single "form encoding"
+// Note: For some reason it complains, results are different. Not researched.
 echo "== BASIC TEST ==\n";
 $s = $sjis;
 $s = mb_detect_encoding($s, 'SJIS');
@@ -108,4 +108,4 @@ SJIS: SJIS
 == INVALID PARAMETER ==
 INT: EUC-JP
 EUC-JP: EUC-JP
-mb_detect_encoding(): Argument #2 ($encoding_list) contains invalid encoding "BAD"
+mb_detect_encoding(): Argument #2 ($encodings) contains invalid encoding "BAD"

@@ -125,8 +125,7 @@ static inline spl_recursive_it_object *spl_recursive_it_from_obj(zend_object *ob
 	do { 																						\
 		spl_dual_it_object *it = Z_SPLDUAL_IT_P(objzval); 										\
 		if (it->dit_type == DIT_Unknown) { 														\
-			zend_throw_exception_ex(spl_ce_LogicException, 0, 						\
-				"The object is in an invalid state as the parent constructor was not called"); 	\
+			zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called"); 	\
 			RETURN_THROWS(); 																			\
 		} 																						\
 		(var) = it; 																			\
@@ -135,8 +134,7 @@ static inline spl_recursive_it_object *spl_recursive_it_from_obj(zend_object *ob
 #define SPL_FETCH_SUB_ELEMENT(var, object, element) \
 	do { \
 		if(!(object)->iterators) { \
-			zend_throw_exception_ex(spl_ce_LogicException, 0, \
-				"The object is in an invalid state as the parent constructor was not called"); \
+			zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called"); \
 			return; \
 		} \
 		(var) = (object)->iterators[(object)->level].element; \
@@ -145,8 +143,7 @@ static inline spl_recursive_it_object *spl_recursive_it_from_obj(zend_object *ob
 #define SPL_FETCH_SUB_ELEMENT_ADDR(var, object, element) \
 	do { \
 		if(!(object)->iterators) { \
-			zend_throw_exception_ex(spl_ce_LogicException, 0, \
-				"The object is in an invalid state as the parent constructor was not called"); \
+			zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called"); \
 			RETURN_THROWS(); \
 		} \
 		(var) = &(object)->iterators[(object)->level].element; \
@@ -448,14 +445,14 @@ static zend_object_iterator *spl_recursive_it_get_iterator(zend_class_entry *ce,
 	spl_recursive_it_object *object;
 
 	if (by_ref) {
-		zend_throw_exception(spl_ce_RuntimeException, "An iterator cannot be used with foreach by reference", 0);
+		zend_throw_error(NULL, "An iterator cannot be used with foreach by reference");
 		return NULL;
 	}
 	iterator = emalloc(sizeof(spl_recursive_it_iterator));
 	object   = Z_SPLRECURSIVE_IT_P(zobject);
 	if (object->iterators == NULL) {
-		zend_error(E_ERROR, "The object to be iterated is in an invalid state: "
-				"the parent constructor has not been called");
+		zend_throw_error(NULL, "Object is not initialized");
+		return NULL;
 	}
 
 	zend_iterator_init((zend_object_iterator*)iterator);
@@ -687,19 +684,22 @@ PHP_METHOD(RecursiveIteratorIterator, getDepth)
 PHP_METHOD(RecursiveIteratorIterator, getSubIterator)
 {
 	spl_recursive_it_object   *object = Z_SPLRECURSIVE_IT_P(ZEND_THIS);
-	zend_long  level = object->level;
+	zend_long level;
+	zend_bool level_is_null = 1;
 	zval *value;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l", &level) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l!", &level, &level_is_null) == FAILURE) {
 		RETURN_THROWS();
 	}
-	if (level < 0 || level > object->level) {
+
+	if (level_is_null) {
+		level = object->level;
+	} else if (level < 0 || level > object->level) {
 		RETURN_NULL();
 	}
 
 	if(!object->iterators) {
-		zend_throw_exception_ex(spl_ce_LogicException, 0,
-			"The object is in an invalid state as the parent constructor was not called");
+		zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called");
 		RETURN_THROWS();
 	}
 
@@ -829,7 +829,7 @@ PHP_METHOD(RecursiveIteratorIterator, setMaxDepth)
 		RETURN_THROWS();
 	}
 	if (max_depth < -1) {
-		zend_throw_exception(spl_ce_OutOfRangeException, "Parameter max_depth must be >= -1", 0);
+		zend_argument_value_error(1, "must be greater than or equal to -1");
 		RETURN_THROWS();
 	} else if (max_depth > INT_MAX) {
 		max_depth = INT_MAX;
@@ -1041,7 +1041,7 @@ PHP_METHOD(RecursiveTreeIterator, setPrefixPart)
 	}
 
 	if (0 > part || part > 5) {
-		zend_throw_exception_ex(spl_ce_OutOfRangeException, 0, "Use RecursiveTreeIterator::PREFIX_* constant");
+		zend_argument_value_error(1, "must be a RecursiveTreeIterator::PREFIX_* constant");
 		RETURN_THROWS();
 	}
 
@@ -1059,8 +1059,7 @@ PHP_METHOD(RecursiveTreeIterator, getPrefix)
 	}
 
 	if(!object->iterators) {
-		zend_throw_exception_ex(spl_ce_LogicException, 0,
-			"The object is in an invalid state as the parent constructor was not called");
+		zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called");
 		RETURN_THROWS();
 	}
 
@@ -1092,8 +1091,7 @@ PHP_METHOD(RecursiveTreeIterator, getEntry)
 	}
 
 	if(!object->iterators) {
-		zend_throw_exception_ex(spl_ce_LogicException, 0,
-			"The object is in an invalid state as the parent constructor was not called");
+		zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called");
 		RETURN_THROWS();
 	}
 
@@ -1110,8 +1108,7 @@ PHP_METHOD(RecursiveTreeIterator, getPostfix)
 	}
 
 	if(!object->iterators) {
-		zend_throw_exception_ex(spl_ce_LogicException, 0,
-			"The object is in an invalid state as the parent constructor was not called");
+		zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called");
 		RETURN_THROWS();
 	}
 
@@ -1131,8 +1128,7 @@ PHP_METHOD(RecursiveTreeIterator, current)
 	}
 
 	if(!object->iterators) {
-		zend_throw_exception_ex(spl_ce_LogicException, 0,
-			"The object is in an invalid state as the parent constructor was not called");
+		zend_throw_error(NULL, "The object is in an invalid state as the parent constructor was not called");
 		RETURN_THROWS();
 	}
 
@@ -1254,6 +1250,7 @@ static zend_function *spl_dual_it_get_method(zend_object **object, zend_string *
 
 #define SPL_CHECK_CTOR(intern, classname) \
 	if (intern->dit_type == DIT_Unknown) { \
+		/* TODO Normal Error? */ \
 		zend_throw_exception_ex(spl_ce_BadMethodCallException, 0, "Classes derived from %s must call %s::__construct()", \
 				ZSTR_VAL((spl_ce_##classname)->name), ZSTR_VAL((spl_ce_##classname)->name)); \
 		RETURN_THROWS(); \
@@ -1298,11 +1295,11 @@ static spl_dual_it_object* spl_dual_it_construct(INTERNAL_FUNCTION_PARAMETERS, z
 				return NULL;
 			}
 			if (intern->u.limit.offset < 0) {
-				zend_throw_exception(spl_ce_OutOfRangeException, "Parameter offset must be >= 0", 0);
+				zend_argument_value_error(2, "must be greater than or equal to 0");
 				return NULL;
 			}
-			if (intern->u.limit.count < 0 && intern->u.limit.count != -1) {
-				zend_throw_exception(spl_ce_OutOfRangeException, "Parameter count must either be -1 or a value greater than or equal 0", 0);
+			if (intern->u.limit.count < -1) {
+				zend_argument_value_error(3, "must be greater than or equal to -1");
 				return NULL;
 			}
 			break;
@@ -1314,7 +1311,9 @@ static spl_dual_it_object* spl_dual_it_construct(INTERNAL_FUNCTION_PARAMETERS, z
 				return NULL;
 			}
 			if (spl_cit_check_flags(flags) != SUCCESS) {
-				zend_throw_exception(spl_ce_InvalidArgumentException, "Flags must contain only one of CALL_TOSTRING, TOSTRING_USE_KEY, TOSTRING_USE_CURRENT, TOSTRING_USE_INNER", 0);
+				zend_argument_value_error(2, "must contain only one of CachingIterator::CALL_TOSTRING, "
+					"CachingIterator::TOSTRING_USE_KEY, CachingIterator::TOSTRING_USE_CURRENT, "
+					"or CachingIterator::TOSTRING_USE_INNER");
 				return NULL;
 			}
 			intern->u.caching.flags |= flags & CIT_PUBLIC;
@@ -1323,14 +1322,14 @@ static spl_dual_it_object* spl_dual_it_construct(INTERNAL_FUNCTION_PARAMETERS, z
 		}
 		case DIT_IteratorIterator: {
 			zend_class_entry *ce_cast;
-			zend_string *class_name;
+			zend_string *class_name = NULL;
 
-			if (zend_parse_parameters(ZEND_NUM_ARGS(), "O|S", &zobject, ce_inner, &class_name) == FAILURE) {
+			if (zend_parse_parameters(ZEND_NUM_ARGS(), "O|S!", &zobject, ce_inner, &class_name) == FAILURE) {
 				return NULL;
 			}
 			ce = Z_OBJCE_P(zobject);
 			if (!instanceof_function(ce, zend_ce_iterator)) {
-				if (ZEND_NUM_ARGS() > 1) {
+				if (class_name) {
 					if (!(ce_cast = zend_lookup_class(class_name))
 					|| !instanceof_function(ce, ce_cast)
 					|| !ce_cast->get_iterator
@@ -1382,7 +1381,8 @@ static spl_dual_it_object* spl_dual_it_construct(INTERNAL_FUNCTION_PARAMETERS, z
 				return NULL;
 			}
 			if (mode < 0 || mode >= REGIT_MODE_MAX) {
-				zend_throw_exception_ex(spl_ce_InvalidArgumentException, 0, "Illegal mode " ZEND_LONG_FMT, mode);
+				zend_argument_value_error(3, "must be RegexIterator::MATCH, RegexIterator::GET_MATCH, "
+					"RegexIterator::ALL_MATCHES, RegexIterator::SPLIT, or RegexIterator::REPLACE");
 				return NULL;
 			}
 
@@ -1929,7 +1929,8 @@ PHP_METHOD(RegexIterator, setMode)
 	}
 
 	if (mode < 0 || mode >= REGIT_MODE_MAX) {
-		zend_throw_exception_ex(spl_ce_InvalidArgumentException, 0, "Illegal mode " ZEND_LONG_FMT, mode);
+		zend_argument_value_error(1, "must be RegexIterator::MATCH, RegexIterator::GET_MATCH, "
+			"RegexIterator::ALL_MATCHES, RegexIterator::SPLIT, or RegexIterator::REPLACE");
 		RETURN_THROWS();
 	}
 
@@ -2117,6 +2118,51 @@ static void spl_dual_it_free_storage(zend_object *_object)
 	zend_object_std_dtor(&object->std);
 }
 /* }}} */
+
+static HashTable *spl_dual_it_get_gc(zend_object *obj, zval **table, int *n)
+{
+	spl_dual_it_object *object = spl_dual_it_from_obj(obj);
+	zend_get_gc_buffer *gc_buffer = zend_get_gc_buffer_create();
+
+	if (!Z_ISUNDEF(object->inner.zobject)) {
+		zend_get_gc_buffer_add_zval(gc_buffer, &object->inner.zobject);
+	}
+
+	switch (object->dit_type) {
+		case DIT_Unknown:
+		case DIT_Default:
+		case DIT_IteratorIterator:
+		case DIT_NoRewindIterator:
+		case DIT_InfiniteIterator:
+		case DIT_LimitIterator:
+		case DIT_RegexIterator:
+		case DIT_RecursiveRegexIterator:
+			/* Nothing to do */
+			break;
+		case DIT_AppendIterator:
+			zend_get_gc_buffer_add_obj(gc_buffer, &object->u.append.iterator->std);
+			if (Z_TYPE(object->u.append.zarrayit) != IS_UNDEF) {
+				zend_get_gc_buffer_add_zval(gc_buffer, &object->u.append.zarrayit);
+			}
+			break;
+		case DIT_CachingIterator:
+		case DIT_RecursiveCachingIterator:
+			zend_get_gc_buffer_add_zval(gc_buffer, &object->u.caching.zcache);
+			break;
+		case DIT_CallbackFilterIterator:
+		case DIT_RecursiveCallbackFilterIterator:
+			if (object->u.cbfilter) {
+				zend_get_gc_buffer_add_zval(gc_buffer, &object->u.cbfilter->fci.function_name);
+				if (object->u.cbfilter->fci.object) {
+					zend_get_gc_buffer_add_obj(gc_buffer, object->u.cbfilter->fci.object);
+				}
+			}
+			break;
+	}
+
+	zend_get_gc_buffer_use(gc_buffer, table, n);
+	return zend_std_get_properties(obj);
+}
 
 /* {{{ spl_dual_it_new */
 static zend_object *spl_dual_it_new(zend_class_entry *class_type)
@@ -2486,7 +2532,7 @@ PHP_METHOD(CachingIterator, offsetGet)
 	}
 
 	if ((value = zend_symtable_find(Z_ARRVAL(intern->u.caching.zcache), key)) == NULL) {
-		zend_error(E_NOTICE, "Undefined array key \"%s\"", ZSTR_VAL(key));
+		zend_error(E_WARNING, "Undefined array key \"%s\"", ZSTR_VAL(key));
 		return;
 	}
 
@@ -2584,7 +2630,9 @@ PHP_METHOD(CachingIterator, setFlags)
 	SPL_FETCH_AND_CHECK_DUAL_IT(intern, ZEND_THIS);
 
 	if (spl_cit_check_flags(flags) != SUCCESS) {
-		zend_throw_exception(spl_ce_InvalidArgumentException , "Flags must contain only one of CALL_TOSTRING, TOSTRING_USE_KEY, TOSTRING_USE_CURRENT, TOSTRING_USE_INNER", 0);
+		zend_argument_value_error(1, "must contain only one of CachingIterator::CALL_TOSTRING, "
+			"CachingIterator::TOSTRING_USE_KEY, CachingIterator::TOSTRING_USE_CURRENT, "
+			"or CachingIterator::TOSTRING_USE_INNER");
 		RETURN_THROWS();
 	}
 	if ((intern->u.caching.flags & CIT_CALL_TOSTRING) != 0 && (flags & CIT_CALL_TOSTRING) == 0) {
@@ -3188,6 +3236,7 @@ PHP_MINIT_FUNCTION(spl_iterators)
 	spl_handlers_dual_it.clone_obj = NULL;
 	spl_handlers_dual_it.dtor_obj = spl_dual_it_dtor;
 	spl_handlers_dual_it.free_obj = spl_dual_it_free_storage;
+	spl_handlers_dual_it.get_gc = spl_dual_it_get_gc;
 
 	spl_ce_RecursiveIteratorIterator->get_iterator = spl_recursive_it_get_iterator;
 

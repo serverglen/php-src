@@ -426,7 +426,6 @@ int zend_build_cfg(zend_arena **arena, const zend_op_array *op_array, uint32_t b
 			case ZEND_FUNC_GET_ARGS:
 				flags |= ZEND_FUNC_VARARG;
 				break;
-			case ZEND_EXT_NOP:
 			case ZEND_EXT_STMT:
 				flags |= ZEND_FUNC_HAS_EXTENDED_STMT;
 				break;
@@ -593,9 +592,8 @@ int zend_build_cfg(zend_arena **arena, const zend_op_array *op_array, uint32_t b
 	}
 
 	/* Build CFG, Step 4, Mark Reachable Basic Blocks */
-	zend_mark_reachable_blocks(op_array, cfg, 0);
-
 	cfg->flags |= flags;
+	zend_mark_reachable_blocks(op_array, cfg, 0);
 
 	return SUCCESS;
 }

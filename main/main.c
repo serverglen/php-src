@@ -71,6 +71,8 @@
 #include "zend_extensions.h"
 #include "zend_ini.h"
 #include "zend_dtrace.h"
+#include "zend_observer.h"
+#include "zend_system_id.h"
 
 #include "php_content_types.h"
 #include "php_ticks.h"
@@ -268,7 +270,8 @@ static PHP_INI_MH(OnChangeMemoryLimit)
 	} else {
 		PG(memory_limit) = Z_L(1)<<30;		/* effectively, no limit */
 	}
-	return zend_set_memory_limit(PG(memory_limit));
+	zend_set_memory_limit(PG(memory_limit));
+	return SUCCESS;
 }
 /* }}} */
 
@@ -295,43 +298,6 @@ static PHP_INI_MH(OnSetLogFilter)
 	}
 
 	return FAILURE;
-}
-/* }}} */
-
-/* {{{ php_disable_functions */
-static void php_disable_functions(void)
-{
-	char *s = NULL, *e;
-
-	if (!*(INI_STR("disable_functions"))) {
-		return;
-	}
-
-	e = PG(disable_functions) = strdup(INI_STR("disable_functions"));
-	if (e == NULL) {
-		return;
-	}
-	while (*e) {
-		switch (*e) {
-			case ' ':
-			case ',':
-				if (s) {
-					*e = '\0';
-					zend_disable_function(s, e-s);
-					s = NULL;
-				}
-				break;
-			default:
-				if (!s) {
-					s = e;
-				}
-				break;
-		}
-		e++;
-	}
-	if (s) {
-		zend_disable_function(s, e-s);
-	}
 }
 /* }}} */
 
@@ -778,14 +744,14 @@ static int module_startup = 1;
 static int module_shutdown = 0;
 
 /* {{{ php_during_module_startup */
-static int php_during_module_startup(void)
+PHPAPI int php_during_module_startup(void)
 {
 	return module_startup;
 }
 /* }}} */
 
 /* {{{ php_during_module_shutdown */
-static int php_during_module_shutdown(void)
+PHPAPI int php_during_module_shutdown(void)
 {
 	return module_shutdown;
 }
@@ -1225,30 +1191,22 @@ static ZEND_COLD void php_error_cb(int orig_type, const char *error_filename, co
 	/* according to error handling mode, throw exception or show it */
 	if (EG(error_handling) == EH_THROW) {
 		switch (type) {
-			case E_ERROR:
-			case E_CORE_ERROR:
-			case E_COMPILE_ERROR:
-			case E_USER_ERROR:
-			case E_PARSE:
-				/* fatal errors are real errors and cannot be made exceptions */
-				break;
-			case E_STRICT:
-			case E_DEPRECATED:
-			case E_USER_DEPRECATED:
-				/* for the sake of BC to old damaged code */
-				break;
-			case E_NOTICE:
-			case E_USER_NOTICE:
-				/* notices are no errors and are not treated as such like E_WARNINGS */
-				break;
-			default:
-				/* throw an exception if we are in EH_THROW mode
-				 * but DO NOT overwrite a pending exception
+			case E_WARNING:
+			case E_CORE_WARNING:
+			case E_COMPILE_WARNING:
+			case E_USER_WARNING:
+				/* throw an exception if we are in EH_THROW mode and the type is warning.
+				 * fatal errors are real errors and cannot be made exceptions.
+				 * exclude deprecated for the sake of BC to old damaged code.
+				 * notices are no errors and are not treated as such like E_WARNINGS.
+				 * DO NOT overwrite a pending exception.
 				 */
 				if (!EG(exception)) {
 					zend_throw_error_exception(EG(exception_class), message, 0, type);
 				}
 				return;
+			default:
+				break;
 		}
 	}
 
@@ -1520,13 +1478,13 @@ static size_t php_zend_stream_fsizer(void *handle) /* {{{ */
 }
 /* }}} */
 
-static int php_stream_open_for_zend(const char *filename, zend_file_handle *handle) /* {{{ */
+static zend_result php_stream_open_for_zend(const char *filename, zend_file_handle *handle) /* {{{ */
 {
 	return php_stream_open_for_zend_ex(filename, handle, USE_PATH|REPORT_ERRORS|STREAM_OPEN_FOR_INCLUDE);
 }
 /* }}} */
 
-PHPAPI int php_stream_open_for_zend_ex(const char *filename, zend_file_handle *handle, int mode) /* {{{ */
+PHPAPI zend_result php_stream_open_for_zend_ex(const char *filename, zend_file_handle *handle, int mode) /* {{{ */
 {
 	zend_string *opened_path;
 	php_stream *stream = php_stream_open_wrapper((char *)filename, "rb", mode, &opened_path);
@@ -1923,9 +1881,6 @@ static void core_globals_dtor(php_core_globals *core_globals)
 	ZEND_ASSERT(!core_globals->last_error_message);
 	ZEND_ASSERT(!core_globals->last_error_file);
 
-	if (core_globals->disable_functions) {
-		free(core_globals->disable_functions);
-	}
 	if (core_globals->disable_classes) {
 		free(core_globals->disable_classes);
 	}
@@ -2090,8 +2045,9 @@ int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_mod
 	zend_startup(&zuf);
 	zend_update_current_locale();
 
+	zend_observer_startup();
 #if ZEND_DEBUG
-	zend_register_error_notify_callback(report_zend_debug_error_notify_cb);
+	zend_observer_error_register(report_zend_debug_error_notify_cb);
 #endif
 
 #if HAVE_TZSET
@@ -2099,21 +2055,12 @@ int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_mod
 #endif
 
 #ifdef PHP_WIN32
-# if PHP_LINKER_MAJOR == 14
-	/* Extend for other CRT if needed. */
-#  if PHP_DEBUG
-#   define PHP_VCRUNTIME "vcruntime140d.dll"
-#  else
-#   define PHP_VCRUNTIME "vcruntime140.dll"
-#  endif
 	char *img_err;
-	if (!php_win32_crt_compatible(PHP_VCRUNTIME, &img_err)) {
+	if (!php_win32_crt_compatible(&img_err)) {
 		php_error(E_CORE_WARNING, img_err);
 		efree(img_err);
 		return FAILURE;
 	}
-#  undef PHP_VCRUNTIME
-# endif
 
 	/* start up winsock services */
 	if (WSAStartup(wVersionRequested, &wsaData) != 0) {
@@ -2239,6 +2186,9 @@ int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_mod
 	zend_set_utility_values(&zuv);
 	php_startup_sapi_content_types();
 
+	/* Begin to fingerprint the process state */
+	zend_startup_system_id();
+
 	/* startup extensions statically compiled in */
 	if (php_register_internal_extensions_func() == FAILURE) {
 		php_printf("Unable to start builtin modules\n");
@@ -2273,7 +2223,7 @@ int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_mod
 	}
 
 	/* disable certain classes and functions as requested by php.ini */
-	php_disable_functions();
+	zend_disable_functions(INI_STR("disable_functions"));
 	php_disable_classes();
 
 	/* make core report what it should */
@@ -2281,6 +2231,9 @@ int php_module_startup(sapi_module_struct *sf, zend_module_entry *additional_mod
 		module->version = PHP_VERSION;
 		module->info_func = PHP_MINFO(php_core);
 	}
+
+	/* Extensions that add engine hooks after this point do so at their own peril */
+	zend_finalize_system_id();
 
 	module_initialized = 1;
 
@@ -2455,6 +2408,8 @@ void php_module_shutdown(void)
 		_set_invalid_parameter_handler(old_invalid_parameter_handler);
 	}
 #endif
+
+	zend_observer_shutdown();
 }
 /* }}} */
 

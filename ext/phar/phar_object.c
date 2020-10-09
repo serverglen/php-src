@@ -928,7 +928,7 @@ PHP_METHOD(Phar, createDefaultStub)
 	zend_string *stub;
 	size_t index_len = 0, webindex_len = 0;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|pp", &index, &index_len, &webindex, &webindex_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|p!p!", &index, &index_len, &webindex, &webindex_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -1833,7 +1833,7 @@ PHP_METHOD(Phar, buildFromIterator)
 	char *base = NULL;
 	struct _phar_t pass;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "O|s", &obj, zend_ce_traversable, &base, &base_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "O|s!", &obj, zend_ce_traversable, &base, &base_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -2336,10 +2336,10 @@ PHP_METHOD(Phar, convertToExecutable)
 	size_t ext_len = 0;
 	uint32_t flags;
 	zend_object *ret;
-	/* a number that is not 0, 1 or 2 (Which is also Greg's birthday, so there) */
-	zend_long format = 9021976, method = 9021976;
+	zend_long format, method;
+	zend_bool format_is_null = 1, method_is_null = 1;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|lls", &format, &method, &ext, &ext_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l!l!s!", &format, &format_is_null, &method, &method_is_null, &ext, &ext_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -2351,9 +2351,12 @@ PHP_METHOD(Phar, convertToExecutable)
 		RETURN_THROWS();
 	}
 
+	if (format_is_null) {
+		format = PHAR_FORMAT_SAME;
+	}
 	switch (format) {
-		case 9021976:
-		case PHAR_FORMAT_SAME: /* null is converted to 0 */
+		case 9021976: /* Retained for BC */
+		case PHAR_FORMAT_SAME:
 			/* by default, use the existing format */
 			if (phar_obj->archive->is_tar) {
 				format = PHAR_FORMAT_TAR;
@@ -2373,8 +2376,11 @@ PHP_METHOD(Phar, convertToExecutable)
 			RETURN_THROWS();
 	}
 
-	switch (method) {
-		case 9021976:
+	if (method_is_null) {
+		flags = phar_obj->archive->flags & PHAR_FILE_COMPRESSION_MASK;
+	} else {
+		switch (method) {
+		case 9021976: /* Retained for BC */
 			flags = phar_obj->archive->flags & PHAR_FILE_COMPRESSION_MASK;
 			break;
 		case 0:
@@ -2414,6 +2420,7 @@ PHP_METHOD(Phar, convertToExecutable)
 			zend_throw_exception_ex(spl_ce_BadMethodCallException, 0,
 				"Unknown compression specified, please pass one of Phar::GZ or Phar::BZ2");
 			RETURN_THROWS();
+		}
 	}
 
 	is_data = phar_obj->archive->is_data;
@@ -2440,18 +2447,21 @@ PHP_METHOD(Phar, convertToData)
 	size_t ext_len = 0;
 	uint32_t flags;
 	zend_object *ret;
-	/* a number that is not 0, 1 or 2 (Which is also Greg's birthday so there) */
-	zend_long format = 9021976, method = 9021976;
+	zend_long format, method;
+	zend_bool format_is_null = 1, method_is_null = 1;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|lls", &format, &method, &ext, &ext_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l!l!s!", &format, &format_is_null, &method, &method_is_null, &ext, &ext_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
 	PHAR_ARCHIVE_OBJECT();
 
+	if (format_is_null) {
+		format = PHAR_FORMAT_SAME;
+	}
 	switch (format) {
-		case 9021976:
-		case PHAR_FORMAT_SAME: /* null is converted to 0 */
+		case 9021976: /* Retained for BC */
+		case PHAR_FORMAT_SAME:
 			/* by default, use the existing format */
 			if (phar_obj->archive->is_tar) {
 				format = PHAR_FORMAT_TAR;
@@ -2476,8 +2486,11 @@ PHP_METHOD(Phar, convertToData)
 			RETURN_THROWS();
 	}
 
-	switch (method) {
-		case 9021976:
+	if (method_is_null) {
+		flags = phar_obj->archive->flags & PHAR_FILE_COMPRESSION_MASK;
+	} else  {
+		switch (method) {
+		case 9021976: /* Retained for BC */
 			flags = phar_obj->archive->flags & PHAR_FILE_COMPRESSION_MASK;
 			break;
 		case 0:
@@ -2517,6 +2530,7 @@ PHP_METHOD(Phar, convertToData)
 			zend_throw_exception_ex(spl_ce_BadMethodCallException, 0,
 				"Unknown compression specified, please pass one of Phar::GZ or Phar::BZ2");
 			RETURN_THROWS();
+		}
 	}
 
 	is_data = phar_obj->archive->is_data;
@@ -2992,7 +3006,7 @@ PHP_METHOD(Phar, setSignatureAlgorithm)
 	char *error, *key = NULL;
 	size_t key_len = 0;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "l|s", &algo, &key, &key_len) != SUCCESS) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "l|s!", &algo, &key, &key_len) != SUCCESS) {
 		RETURN_THROWS();
 	}
 
@@ -3155,7 +3169,7 @@ PHP_METHOD(Phar, compress)
 	uint32_t flags;
 	zend_object *ret;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "l|s", &method, &ext, &ext_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "l|s!", &method, &ext, &ext_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -3221,7 +3235,7 @@ PHP_METHOD(Phar, decompress)
 	size_t ext_len = 0;
 	zend_object *ret;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|s", &ext, &ext_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|s!", &ext, &ext_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -3804,7 +3818,7 @@ PHP_METHOD(Phar, addFile)
 	php_stream *resource;
 	zval zresource;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "p|s", &fname, &fname_len, &localname, &localname_len) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "p|s!", &fname, &fname_len, &localname, &localname_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -4307,7 +4321,7 @@ PHP_METHOD(Phar, extractTo)
 	ZEND_PARSE_PARAMETERS_START(1, 3)
 		Z_PARAM_PATH(pathto, pathto_len)
 		Z_PARAM_OPTIONAL
-		Z_PARAM_STR_OR_ARRAY_HT_OR_NULL(filename, files_ht)
+		Z_PARAM_ARRAY_HT_OR_STR_OR_NULL(files_ht, filename)
 		Z_PARAM_BOOL(overwrite)
 	ZEND_PARSE_PARAMETERS_END();
 
@@ -4505,17 +4519,21 @@ PHP_METHOD(PharFileInfo, getCompressedSize)
 /* {{{ Returns whether the entry is compressed, and whether it is compressed with Phar::GZ or Phar::BZ2 if specified */
 PHP_METHOD(PharFileInfo, isCompressed)
 {
-	/* a number that is not Phar::GZ or Phar::BZ2 */
-	zend_long method = 9021976;
+	zend_long method;
+	zend_bool method_is_null = 1;
 
-	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l", &method) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|l!", &method, &method_is_null) == FAILURE) {
 		RETURN_THROWS();
 	}
 
 	PHAR_ENTRY_OBJECT();
 
+	if (method_is_null) {
+		RETURN_BOOL(entry_obj->entry->flags & PHAR_ENT_COMPRESSION_MASK);
+	}
+
 	switch (method) {
-		case 9021976:
+		case 9021976: /* Retained for BC */
 			RETURN_BOOL(entry_obj->entry->flags & PHAR_ENT_COMPRESSION_MASK);
 		case PHAR_ENT_COMPRESSED_GZ:
 			RETURN_BOOL(entry_obj->entry->flags & PHAR_ENT_COMPRESSED_GZ);

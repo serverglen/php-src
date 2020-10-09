@@ -967,7 +967,15 @@ static void assemble_code_blocks(zend_cfg *cfg, zend_op_array *op_array, zend_op
 		if (b->len == 0) {
 			continue;
 		}
-		if (b->flags & ZEND_BB_REACHABLE) {
+		if (b->flags & (ZEND_BB_REACHABLE|ZEND_BB_UNREACHABLE_FREE)) {
+			if (b->flags & ZEND_BB_UNREACHABLE_FREE) {
+				/* Only keep the FREE for the loop var */
+				ZEND_ASSERT(op_array->opcodes[b->start].opcode == ZEND_FREE
+						|| op_array->opcodes[b->start].opcode == ZEND_FE_FREE);
+				len += b->len = 1;
+				continue;
+			}
+
 			opline = op_array->opcodes + b->start + b->len - 1;
 			if (opline->opcode == ZEND_JMP) {
 				zend_basic_block *next = b + 1;
@@ -1005,7 +1013,7 @@ static void assemble_code_blocks(zend_cfg *cfg, zend_op_array *op_array, zend_op
 
 	/* Copy code of reachable blocks into a single buffer */
 	for (b = blocks; b < end; b++) {
-		if (b->flags & ZEND_BB_REACHABLE) {
+		if (b->flags & (ZEND_BB_REACHABLE|ZEND_BB_UNREACHABLE_FREE)) {
 			memcpy(opline, op_array->opcodes + b->start, b->len * sizeof(zend_op));
 			b->start = opline - new_opcodes;
 			opline += b->len;
@@ -1131,7 +1139,7 @@ static void assemble_code_blocks(zend_cfg *cfg, zend_op_array *op_array, zend_op
 	/* rebuild map (just for printing) */
 	memset(cfg->map, -1, sizeof(int) * op_array->last);
 	for (n = 0; n < cfg->blocks_count; n++) {
-		if (cfg->blocks[n].flags & ZEND_BB_REACHABLE) {
+		if (cfg->blocks[n].flags & (ZEND_BB_REACHABLE|ZEND_BB_UNREACHABLE_FREE)) {
 			cfg->map[cfg->blocks[n].start] = n;
 		}
 	}
@@ -1363,6 +1371,7 @@ static void zend_jmp_optimization(zend_basic_block *block, zend_op_array *op_arr
 							MAKE_NOP(last_op);
 							block->len--;
 						}
+						block->successors[0] = follow_block - cfg->blocks;
 						block->successors_count = 1;
 						++(*opt_count);
 						break;
@@ -1892,7 +1901,7 @@ void zend_optimize_cfg(zend_op_array *op_array, zend_optimizer_ctx *ctx)
 
 		/* Eliminate NOPs */
 		for (b = blocks; b < end; b++) {
-			if (b->flags & ZEND_BB_REACHABLE) {
+			if (b->flags & (ZEND_BB_REACHABLE|ZEND_BB_UNREACHABLE_FREE)) {
 				strip_nops(op_array, b);
 			}
 		}

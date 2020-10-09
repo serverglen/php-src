@@ -508,8 +508,8 @@ ZEND_API uint32_t *zend_get_property_guard(zend_object *zobj, zend_string *membe
 	if (EXPECTED(Z_TYPE_P(zv) == IS_STRING)) {
 		zend_string *str = Z_STR_P(zv);
 		if (EXPECTED(str == member) ||
-		     /* hash values are always pred-calculated here */
-		    (EXPECTED(ZSTR_H(str) == ZSTR_H(member)) &&
+		     /* "str" always has a pre-calculated hash value here */
+		    (EXPECTED(ZSTR_H(str) == zend_string_hash_val(member)) &&
 		     EXPECTED(zend_string_equal_content(str, member)))) {
 			return &Z_PROPERTY_GUARD_P(zv);
 		} else if (EXPECTED(Z_PROPERTY_GUARD_P(zv) == 0)) {
@@ -691,6 +691,13 @@ exit:
 }
 /* }}} */
 
+static zend_always_inline zend_bool property_uses_strict_types() {
+	zend_execute_data *execute_data = EG(current_execute_data);
+	return execute_data
+		&& execute_data->func
+		&& ZEND_CALL_USES_STRICT_TYPES(EG(current_execute_data));
+}
+
 ZEND_API zval *zend_std_write_property(zend_object *zobj, zend_string *name, zval *value, void **cache_slot) /* {{{ */
 {
 	zval *variable_ptr, tmp;
@@ -707,7 +714,7 @@ ZEND_API zval *zend_std_write_property(zend_object *zobj, zend_string *name, zva
 
 			if (UNEXPECTED(prop_info)) {
 				ZVAL_COPY_VALUE(&tmp, value);
-				if (UNEXPECTED(!zend_verify_property_type(prop_info, &tmp, EG(current_execute_data) && ZEND_CALL_USES_STRICT_TYPES(EG(current_execute_data))))) {
+				if (UNEXPECTED(!zend_verify_property_type(prop_info, &tmp, property_uses_strict_types()))) {
 					Z_TRY_DELREF_P(value);
 					variable_ptr = &EG(error_zval);
 					goto exit;
@@ -716,7 +723,7 @@ ZEND_API zval *zend_std_write_property(zend_object *zobj, zend_string *name, zva
 			}
 
 found:
-			zend_assign_to_variable(variable_ptr, value, IS_TMP_VAR, EG(current_execute_data) && ZEND_CALL_USES_STRICT_TYPES(EG(current_execute_data)));
+			zend_assign_to_variable(variable_ptr, value, IS_TMP_VAR, property_uses_strict_types());
 			goto exit;
 		}
 		if (Z_PROP_FLAG_P(variable_ptr) == IS_PROP_UNINIT) {
@@ -772,7 +779,7 @@ write_std_property:
 
 			if (UNEXPECTED(prop_info)) {
 				ZVAL_COPY_VALUE(&tmp, value);
-				if (UNEXPECTED(!zend_verify_property_type(prop_info, &tmp, ZEND_CALL_USES_STRICT_TYPES(EG(current_execute_data))))) {
+				if (UNEXPECTED(!zend_verify_property_type(prop_info, &tmp, property_uses_strict_types()))) {
 					zval_ptr_dtor(value);
 					goto exit;
 				}
@@ -918,7 +925,8 @@ ZEND_API zval *zend_std_get_property_ptr_ptr(zend_object *zobj, zend_string *nam
 		retval = OBJ_PROP(zobj, property_offset);
 		if (UNEXPECTED(Z_TYPE_P(retval) == IS_UNDEF)) {
 			if (EXPECTED(!zobj->ce->__get) ||
-			    UNEXPECTED((*zend_get_property_guard(zobj, name)) & IN_GET)) {
+			    UNEXPECTED((*zend_get_property_guard(zobj, name)) & IN_GET) ||
+			    UNEXPECTED(prop_info && Z_PROP_FLAG_P(retval) == IS_PROP_UNINIT)) {
 				if (UNEXPECTED(type == BP_VAR_RW || type == BP_VAR_R)) {
 					if (UNEXPECTED(prop_info)) {
 						zend_throw_error(NULL,
@@ -1768,8 +1776,8 @@ ZEND_API HashTable *zend_std_get_properties_for(zend_object *obj, zend_prop_purp
 			if (obj->handlers->get_debug_info) {
 				int is_temp;
 				ht = obj->handlers->get_debug_info(obj, &is_temp);
-				if (ht && !is_temp && !(GC_FLAGS(ht) & GC_IMMUTABLE)) {
-					GC_ADDREF(ht);
+				if (ht && !is_temp) {
+					GC_TRY_ADDREF(ht);
 				}
 				return ht;
 			}
@@ -1779,8 +1787,8 @@ ZEND_API HashTable *zend_std_get_properties_for(zend_object *obj, zend_prop_purp
 		case ZEND_PROP_PURPOSE_VAR_EXPORT:
 		case ZEND_PROP_PURPOSE_JSON:
 			ht = obj->handlers->get_properties(obj);
-			if (ht && !(GC_FLAGS(ht) & GC_IMMUTABLE)) {
-				GC_ADDREF(ht);
+			if (ht) {
+				GC_TRY_ADDREF(ht);
 			}
 			return ht;
 		default:

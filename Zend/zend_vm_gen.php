@@ -793,6 +793,13 @@ function gen_code($f, $spec, $kind, $code, $op1, $op2, $name, $extra_spec=null) 
         "/opline->extended_value\s*&\s*~\s*ZEND_ISEMPTY/" => isset($extra_spec['ISSET']) ?
             ($extra_spec['ISSET'] == 0 ? "\\0" : "opline->extended_value")
             : "\\0",
+        "/ZEND_OBSERVER_ENABLED/" => isset($extra_spec['OBSERVER']) && $extra_spec['OBSERVER'] == 1 ? "1" : "0",
+        "/ZEND_OBSERVER_FCALL_BEGIN\(\s*(.*)\s*\)/" => isset($extra_spec['OBSERVER']) ?
+            ($extra_spec['OBSERVER'] == 0 ? "" : "zend_observer_fcall_begin(\\1)")
+            : "",
+        "/ZEND_OBSERVER_FCALL_END\(\s*([^,]*)\s*,\s*(.*)\s*\)/" => isset($extra_spec['OBSERVER']) ?
+            ($extra_spec['OBSERVER'] == 0 ? "" : "zend_observer_fcall_end(\\1, \\2)")
+            : "",
     );
     $code = preg_replace(array_keys($specialized_replacements), array_values($specialized_replacements), $code);
 
@@ -952,6 +959,9 @@ function is_hot_handler($hot, $op1, $op2, $extra_spec) {
     if (isset($extra_spec["SMART_BRANCH"]) && $extra_spec["SMART_BRANCH"] == 0) {
         return false;
     }
+    if (isset($extra_spec["OBSERVER"]) && $extra_spec["OBSERVER"] == 1) {
+        return false;
+    }
     if ($hot === 'HOT_' || $hot === 'INLINE_') {
         return true;
     } else if ($hot === 'HOT_NOCONST_') {
@@ -969,6 +979,8 @@ function is_hot_handler($hot, $op1, $op2, $extra_spec) {
 
 function is_cold_handler($hot, $op1, $op2, $extra_spec) {
     if ($hot === 'COLD_') {
+        return true;
+    } else if (isset($extra_spec["OBSERVER"]) && $extra_spec["OBSERVER"] == 1) {
         return true;
     } else if ($hot === 'COLD_CONST_') {
         return ($op1 === 'CONST');
@@ -992,6 +1004,8 @@ function is_inline_hybrid_handler($name, $hot, $op1, $op2, $extra_spec) {
 // Generates opcode handler
 function gen_handler($f, $spec, $kind, $name, $op1, $op2, $use, $code, $lineno, $opcode, $extra_spec = null, &$switch_labels = array()) {
     global $definition_file, $prefix, $opnames, $gen_order;
+
+    static $used_observer_handlers = array();
 
     if (isset($opcode['alias']) && ($spec || $kind != ZEND_VM_KIND_SWITCH)) {
         return;
@@ -1020,6 +1034,26 @@ function gen_handler($f, $spec, $kind, $name, $op1, $op2, $use, $code, $lineno, 
         if ($op2 === "CONST") {
             if ($extra_spec["QUICK_ARG"] == 0) {
                 unset($extra_spec["QUICK_ARG"]);
+            } else {
+                return;
+            }
+        }
+    }
+
+    /* Skip all specialization for OBSERVER handlers */
+    if (isset($extra_spec["OBSERVER"]) && $extra_spec["OBSERVER"] == 1) {
+        if (isset($extra_spec["RETVAL"])) {
+            if ($extra_spec["RETVAL"] == 0) {
+                unset($extra_spec["RETVAL"]);
+            } else {
+                return;
+            }
+        }
+        if ($op1 != "ANY" || $op2 != "ANY") {
+            if (!isset($used_observer_handlers[$kind][$opcode["op"]])) {
+                $used_observer_handlers[$kind][$opcode["op"]] = true;
+                $op1 = "ANY";
+                $op2 = "ANY";
             } else {
                 return;
             }
@@ -1353,6 +1387,17 @@ function gen_labels($f, $spec, $kind, $prolog, &$specs, $switch_labels = array()
                         }
                     }
 
+                    /* Skip all specialization for OBSERVER handlers */
+                    if (isset($extra_spec["OBSERVER"]) && $extra_spec["OBSERVER"] == 1) {
+                        if (isset($extra_spec["RETVAL"])) {
+                            unset($extra_spec["RETVAL"]);
+                        }
+                        if ($op1 != "ANY" || $op2 != "ANY") {
+                            $op1 = "ANY";
+                            $op2 = "ANY";
+                        }
+                    }
+
                     // Emit pointer to specialized handler
                     $spec_name = $dsc["op"]."_SPEC".$prefix[$op1].$prefix[$op2].extra_spec_name($extra_spec);
                     switch ($kind) {
@@ -1550,6 +1595,11 @@ function extra_spec_name($extra_spec) {
             $s .= "_EMPTY";
         }
     }
+    if (isset($extra_spec["OBSERVER"])) {
+        if ($extra_spec["OBSERVER"]) {
+            $s .= "_OBSERVER";
+        }
+    }
     return $s;
 }
 
@@ -1572,6 +1622,9 @@ function extra_spec_flags($extra_spec) {
     }
     if (isset($extra_spec["ISSET"])) {
         $s[] = "SPEC_RULE_ISSET";
+    }
+    if (isset($extra_spec["OBSERVER"])) {
+        $s[] = "SPEC_RULE_OBSERVER";
     }
     return $s;
 }
@@ -1771,6 +1824,7 @@ function gen_executor($f, $skl, $spec, $kind, $executor_name, $initializer_name)
                     out($f,"#define SPEC_RULE_SMART_BRANCH 0x00200000\n");
                     out($f,"#define SPEC_RULE_COMMUTATIVE  0x00800000\n");
                     out($f,"#define SPEC_RULE_ISSET        0x01000000\n");
+                    out($f,"#define SPEC_RULE_OBSERVER     0x02000000\n");
                     out($f,"\n");
                     out($f,"static const uint32_t *zend_spec_handlers;\n");
                     out($f,"static const void * const *zend_opcode_handlers;\n");
@@ -2247,6 +2301,9 @@ function parse_spec_rules($def, $lineno, $str) {
                 case "ISSET":
                     $ret["ISSET"] = array(0, 1);
                     break;
+                case "OBSERVER":
+                    $ret["OBSERVER"] = array(0, 1);
+                    break;
                 default:
                     die("ERROR ($def:$lineno): Wrong specialization rules '$str'\n");
             }
@@ -2653,7 +2710,8 @@ function gen_vm($def, $skel) {
             isset($used_extra_spec["RETVAL"]) ||
             isset($used_extra_spec["QUICK_ARG"]) ||
             isset($used_extra_spec["SMART_BRANCH"]) ||
-            isset($used_extra_spec["ISSET"])) {
+            isset($used_extra_spec["ISSET"]) ||
+            isset($used_extra_spec["OBSERVER"])) {
 
             $else = "";
             out($f, "\tif (spec & SPEC_EXTRA_MASK) {\n");
@@ -2661,6 +2719,9 @@ function gen_vm($def, $skel) {
             if (isset($used_extra_spec["RETVAL"])) {
                 out($f, "\t\t{$else}if (spec & SPEC_RULE_RETVAL) {\n");
                 out($f, "\t\t\toffset = offset * 2 + (op->result_type != IS_UNUSED);\n");
+                out($f, "\t\t\tif ((spec & SPEC_RULE_OBSERVER) && ZEND_OBSERVER_ENABLED) {\n");
+                out($f,	"\t\t\t\toffset += 2;\n");
+                out($f, "\t\t\t}\n");
                 $else = "} else ";
             }
             if (isset($used_extra_spec["QUICK_ARG"])) {
@@ -2685,6 +2746,14 @@ function gen_vm($def, $skel) {
                 out($f,	"\t\t\t\toffset += 1;\n");
                 out($f, "\t\t\t} else if (op->result_type == (IS_SMART_BRANCH_JMPNZ|IS_TMP_VAR)) {\n");
                 out($f,	"\t\t\t\toffset += 2;\n");
+                out($f, "\t\t\t}\n");
+                $else = "} else ";
+            }
+            if (isset($used_extra_spec["OBSERVER"])) {
+                out($f, "\t\t{$else}if (spec & SPEC_RULE_OBSERVER) {\n");
+                out($f,	"\t\t\toffset = offset * 2;\n");
+                out($f, "\t\t\tif (ZEND_OBSERVER_ENABLED) {\n");
+                out($f,	"\t\t\t\toffset += 1;\n");
                 out($f, "\t\t\t}\n");
                 $else = "} else ";
             }

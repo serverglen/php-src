@@ -27,6 +27,8 @@ PHP 8.0 UPGRADE NOTES
   . Methods with the same name as the class are no longer interpreted as
     constructors. The __construct() method should be used instead.
   . Removed ability to call non-static methods statically.
+    Thus `is_callable` will fail when checking for a non-static method with a
+    classname (must check with an object instance).
   . Removed (unset) cast.
   . Removed track_errors ini directive. This means that $php_errormsg is no
     longer available. The error_get_last() function may be used instead.
@@ -81,10 +83,10 @@ PHP 8.0 UPGRADE NOTES
     Additionally, care should be taken that error messages are not displayed in
     production environments, which can result in information leaks. Please
     ensure that display_errors=Off is used in conjunction with error logging.
-  . Adding more than one @ operator to an expression is no longer supported,
-    since this syntax is now used for attributes (previously extra @ operators
-    had no effect).
-    RFC: https://wiki.php.net/rfc/shorter_attribute_syntax
+  . Following the hash comment operator # immediately with an opening bracket
+    is not supported as a comment anymore since this syntax is now used for
+    attributes.
+    RFC: https://wiki.php.net/rfc/shorter_attribute_syntax_change
   . Inheritance errors due to incompatible method signatures (LSP violations)
     will now always generate a fatal error. Previously a warning was generated
     in some cases.
@@ -135,10 +137,10 @@ PHP 8.0 UPGRADE NOTES
   . Uncaught exceptions now go through "clean shutdown", which means that
     destructors will be called after an uncaught exception.
   . Compile time fatal error "Only variables can be passed by reference" has
-    been delayed until runtime and converted to "Cannot pass parameter by
+    been delayed until runtime and converted to "Argument cannot be passed by
     reference" exception.
   . Some "Only variables should be passed by reference" notices have been
-    converted to "Cannot pass parameter by reference" exception.
+    converted to "Argument cannot be passed by reference" exception.
   . The generated name for anonymous classes has changed. It will now include
     the name of the first parent or interface:
 
@@ -254,6 +256,8 @@ PHP 8.0 UPGRADE NOTES
       __wakeup(): void
 
     RFC: https://wiki.php.net/rfc/magic-methods-signature
+  . call_user_func_array() array keys will now be interpreted as parameter names,
+    instead of being silently ignored.
 
 - COM:
   . Removed the ability to import case-insensitive constants from type
@@ -325,6 +329,10 @@ PHP 8.0 UPGRADE NOTES
   . iconv() implementations which do not properly set errno in case of errors
     are no longer supported.
 
+- IMAP:
+  . The unused default_host argument of imap_headerinfo() has been removed.
+  . The imap_header() function which is an alias of imap_headerinfo() has been removed.
+
 - Intl:
   . The deprecated constant INTL_IDNA_VARIANT_2003 has been removed.
     RFC: https://wiki.php.net/rfc/deprecate-and-remove-intl_idna_variant_2003
@@ -335,6 +343,8 @@ PHP 8.0 UPGRADE NOTES
 
 - LDAP:
   . The deprecated function ldap_sort has been removed.
+  . The deprecated function ldap_control_paged_result has been removed.
+  . The deprecated function ldap_control_paged_result_response has been removed.
   . The interface of ldap_set_rebind_proc has changed; the $callback parameter
     does not accept empty string anymore; null value shall be used instead.
 
@@ -387,6 +397,10 @@ PHP 8.0 UPGRADE NOTES
   . Several alias functions have been marked as deprecated.
   . oci_internal_debug() and its alias ociinternaldebug() have been removed.
 
+- ODBC:
+  . odbc_connect() no longer reuses persistent connections.
+  . The unused flags parameter of odbc_exec() has been removed.
+
 - OpenSSL:
   . openssl_x509_read() and openssl_csr_sign() will now return an
     OpenSSLCertificate object rather than a resource. Return value checks using
@@ -403,6 +417,8 @@ PHP 8.0 UPGRADE NOTES
   . The openssl_pkey_free() function is deprecated and no longer has an effect,
     instead the OpenSSLAsymmetricKey instance is automatically destroyed if it is no
     longer referenced.
+  . openssl_seal() and openssl_open() now require $method to be passed, as the
+    previous default of "RC4" is considered insecure.
 
 - PCRE:
   . When passing invalid escape sequences they are no longer interpreted as
@@ -422,6 +438,15 @@ PHP 8.0 UPGRADE NOTES
 
 - PDO_ODBC:
   . The php.ini directive pdo_odbc.db2_instance_name has been removed
+
+- pgsql:
+  . The deprecated pg_connect() syntax using multiple parameters instead of a
+    connection string is no longer supported.
+  . The deprecated pg_lo_import() and pg_lo_export() signature that passes the
+    connection as the last argument is no longer supported. The connection
+    should be passed as first argument instead.
+  . pg_fetch_all() will now return an empty array instead of false for result
+    sets with zero rows.
 
 - Phar:
   . Metadata associated with a phar will no longer be automatically unserialized,
@@ -487,6 +512,12 @@ PHP 8.0 UPGRADE NOTES
   . spl_autoload_register() will now always throw a TypeError on invalid
     arguments, therefore the second argument $do_throw is ignored and a
     notice will be emitted if it is set to false.
+  . SplFixedArray is now an IteratorAggregate and not an Iterator.
+    SplFixedArray::rewind(), ::current(), ::key(), ::next(), and ::valid()
+    have been removed. In their place, SplFixedArray::getIterator() has been
+    added. Any code which uses explicit iteration over SplFixedArray must now
+    obtain an Iterator through SplFixedArray::getIterator(). This means that
+    SplFixedArray is now safe to use in nested loops.
 
 - Standard:
   . assert() will no longer evaluate string arguments, instead they will be
@@ -576,6 +607,12 @@ PHP 8.0 UPGRADE NOTES
 
         $ctx = stream_context_create(['http' => ['protocol_version' => '1.0']]);
         echo file_get_contents('http://example.org', false, $ctx);
+  . Calling crypt() without an explicit salt is no longer supported. If you
+    would like to produce a strong hash with an auto-generated salt, use
+    password_hash() instead.
+  . substr(), mb_substr(), iconv_substr() and grapheme_substr() now consistently
+    clamp out-of-bounds offsets to the string boundary. Previously, false was
+    returned instead of the empty string in some cases.
 
 - Sysvmsg:
   . msg_get_queue() will now return an SysvMessageQueue object rather than a
@@ -586,6 +623,8 @@ PHP 8.0 UPGRADE NOTES
   . sem_get() will now return an SysvSemaphore object rather than a resource.
     Return value checks using is_resource() should be replaced with checks
     for `false`.
+  . The $auto_release parameter of sem_get() was changed to accept bool values
+    rather than int.
 
 - Sysvshm:
   . shm_attach() will now return an SysvSharedMemory object rather than a resource.
@@ -630,6 +669,8 @@ PHP 8.0 UPGRADE NOTES
   . deflate_init() will now return a DeflateContext object rather than a
     resource. Return value checks using is_resource() should be replaced with
     checks for `false`.
+  . zlib.output_compression is no longer automatically disabled for
+    Content-Type: image/*.
 
 ========================================
 2. New Features
@@ -687,6 +728,7 @@ PHP 8.0 UPGRADE NOTES
     RFC: https://wiki.php.net/rfc/attributes_v2
     RFC: https://wiki.php.net/rfc/attribute_amendments
     RFC: https://wiki.php.net/rfc/shorter_attribute_syntax
+    RFC: https://wiki.php.net/rfc/shorter_attribute_syntax_change
   . Added support for constructor property promotion (declaring properties in
     the constructor signature).
     RFC: https://wiki.php.net/rfc/constructor_promotion
@@ -765,9 +807,19 @@ PHP 8.0 UPGRADE NOTES
   . Sorting functions are now stable, which means that equal-comparing elements
     will retain their original order.
     RFC: https://wiki.php.net/rfc/stable_sorting
+  . array_diff(), array_intersect() and their variations can now be used with
+    a single array as argument. This means that usages like the following are
+    now possible:
+
+        // OK even if $excludes is empty.
+        array_diff($array, ...$excludes);
+        // OK even if $arrays only contains a single array.
+        array_intersect(...$arrays);
+  . The $flag parameter of ob_implicit_flush() was changed to accept bool
+    values rather than int.
 
 - Zip:
-  . Extension updated to version 1.19.0
+  . Extension updated to version 1.19.1
   . New ZipArchive::lastId property to get index value of last added entry.
   . Error can be checked after an archive is closed using ZipArchive::status,
     ZipArchive::statusSys properties or ZipArchive::getStatusString() method.
@@ -819,6 +871,7 @@ PHP 8.0 UPGRADE NOTES
 - PGSQL / PDO PGSQL:
   . The constant PG_VERSION_STR has now the same value as PG_VERSION, and thus
     is deprecated.
+  . Function aliases in the pgsql extension have been deprecated.
 
 - Zip:
   . Using empty file as ZipArchive is deprecated. Libzip 1.6.0
@@ -1008,7 +1061,7 @@ PHP 8.0 UPGRADE NOTES
 
 - MySQLi / PDO MySQL:
   . When mysqlnd is not used (which is the default and recommended option),
-    the minimum supported libmysqlclient version is now 5.1.
+    the minimum supported libmysqlclient version is now 5.5.
   . mysqli_result now implements IteratorAggregate (instead of Traversable).
 
 - PGSQL / PDO PGSQL:

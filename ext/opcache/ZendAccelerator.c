@@ -106,7 +106,6 @@ ZEND_TSRMLS_CACHE_DEFINE()
 zend_accel_shared_globals *accel_shared_globals = NULL;
 
 /* true globals, no need for thread safety */
-char accel_system_id[32];
 #ifdef ZEND_WIN32
 char accel_uname_id[32];
 #endif
@@ -119,15 +118,14 @@ zend_bool fallback_process = 0; /* process uses file cache fallback */
 #endif
 
 static zend_op_array *(*accelerator_orig_compile_file)(zend_file_handle *file_handle, int type);
-static int (*accelerator_orig_zend_stream_open_function)(const char *filename, zend_file_handle *handle );
+static zend_result (*accelerator_orig_zend_stream_open_function)(const char *filename, zend_file_handle *handle );
 static zend_string *(*accelerator_orig_zend_resolve_path)(const char *filename, size_t filename_len);
 static void (*accelerator_orig_zend_error_cb)(int type, const char *error_filename, const uint32_t error_lineno, zend_string *message);
 static zif_handler orig_chdir = NULL;
 static ZEND_INI_MH((*orig_include_path_on_modify)) = NULL;
-static int (*orig_post_startup_cb)(void);
+static zend_result (*orig_post_startup_cb)(void);
 
-static void accel_gen_system_id(void);
-static int accel_post_startup(void);
+static zend_result accel_post_startup(void);
 static int accel_finish_startup(void);
 
 static void preload_shutdown(void);
@@ -304,7 +302,7 @@ static inline int accel_restart_is_active(void)
 }
 
 /* Creates a read lock for SHM access */
-static inline int accel_activate_add(void)
+static inline zend_result accel_activate_add(void)
 {
 #ifdef ZEND_WIN32
 	SHM_UNPROTECT();
@@ -551,7 +549,7 @@ static zend_always_inline zend_string *accel_find_interned_string_ex(zend_ulong 
 	return NULL;
 }
 
-static zend_string* ZEND_FASTCALL accel_init_interned_string_for_php(const char *str, size_t size, int permanent)
+static zend_string* ZEND_FASTCALL accel_init_interned_string_for_php(const char *str, size_t size, bool permanent)
 {
 	if (ZCG(counted)) {
 	    zend_ulong h = zend_inline_hash_func(str, size);
@@ -2269,7 +2267,7 @@ static int accel_gen_uname_id(void)
 #endif
 
 /* zend_stream_open_function() replacement for PHP 5.3 and above */
-static int persistent_stream_open_function(const char *filename, zend_file_handle *handle)
+static zend_result persistent_stream_open_function(const char *filename, zend_file_handle *handle)
 {
 	if (ZCG(cache_persistent_script)) {
 		/* check if callback is called from include_once or it's a main request */
@@ -2400,7 +2398,7 @@ static void accel_reset_pcre_cache(void)
 	} ZEND_HASH_FOREACH_END();
 }
 
-int accel_activate(INIT_FUNC_ARGS)
+zend_result accel_activate(INIT_FUNC_ARGS)
 {
 	if (!ZCG(enabled) || !accel_startup_ok) {
 		ZCG(accelerator_enabled) = 0;
@@ -2546,7 +2544,7 @@ void accel_deactivate(void)
 }
 #endif
 
-int accel_post_deactivate(void)
+zend_result accel_post_deactivate(void)
 {
 	if (ZCG(cwd)) {
 		zend_string_release_ex(ZCG(cwd), 0);
@@ -2707,26 +2705,6 @@ static void accel_globals_ctor(zend_accel_globals *accel_globals)
 	ZEND_TSRMLS_CACHE_UPDATE();
 #endif
 	memset(accel_globals, 0, sizeof(zend_accel_globals));
-}
-
-#define ZEND_BIN_ID "BIN_" ZEND_TOSTR(SIZEOF_INT) ZEND_TOSTR(SIZEOF_LONG) ZEND_TOSTR(SIZEOF_SIZE_T) ZEND_TOSTR(SIZEOF_ZEND_LONG) ZEND_TOSTR(ZEND_MM_ALIGNMENT)
-
-static void accel_gen_system_id(void)
-{
-	PHP_MD5_CTX context;
-	unsigned char digest[16];
-
-	PHP_MD5Init(&context);
-	PHP_MD5Update(&context, PHP_VERSION, sizeof(PHP_VERSION)-1);
-	PHP_MD5Update(&context, ZEND_EXTENSION_BUILD_ID, sizeof(ZEND_EXTENSION_BUILD_ID)-1);
-	PHP_MD5Update(&context, ZEND_BIN_ID, sizeof(ZEND_BIN_ID)-1);
-	if (strstr(PHP_VERSION, "-dev") != 0) {
-		/* Development versions may be changed from build to build */
-		PHP_MD5Update(&context, __DATE__, sizeof(__DATE__)-1);
-		PHP_MD5Update(&context, __TIME__, sizeof(__TIME__)-1);
-	}
-	PHP_MD5Final(digest, &context);
-	php_hash_bin2hex(accel_system_id, digest, sizeof digest);
 }
 
 #ifdef HAVE_HUGE_CODE_PAGES
@@ -2913,8 +2891,6 @@ static int accel_startup(zend_extension *extension)
 # endif
 #endif
 
-	accel_gen_system_id();
-
 	if (start_accel_module() == FAILURE) {
 		accel_startup_ok = 0;
 		zend_error(E_WARNING, ACCELERATOR_PRODUCT_NAME ": module registration failed!");
@@ -2963,13 +2939,13 @@ static int accel_startup(zend_extension *extension)
 	return SUCCESS;
 }
 
-static int accel_post_startup(void)
+static zend_result accel_post_startup(void)
 {
 	zend_function *func;
 	zend_ini_entry *ini_entry;
 
 	if (orig_post_startup_cb) {
-		int (*cb)(void) = orig_post_startup_cb;
+		zend_result (*cb)(void) = orig_post_startup_cb;
 
 		orig_post_startup_cb = NULL;
 		if (cb() != SUCCESS) {
@@ -4184,6 +4160,7 @@ static void preload_fix_trait_methods(zend_class_entry *ce)
 static int preload_optimize(zend_persistent_script *script)
 {
 	zend_class_entry *ce;
+	zend_persistent_script *tmp_script;
 
 	zend_shared_alloc_init_xlat_table();
 
@@ -4193,8 +4170,8 @@ static int preload_optimize(zend_persistent_script *script)
 		}
 	} ZEND_HASH_FOREACH_END();
 
-	ZEND_HASH_FOREACH_PTR(preload_scripts, script) {
-		ZEND_HASH_FOREACH_PTR(&script->script.class_table, ce) {
+	ZEND_HASH_FOREACH_PTR(preload_scripts, tmp_script) {
+		ZEND_HASH_FOREACH_PTR(&tmp_script->script.class_table, ce) {
 			if (ce->ce_flags & ZEND_ACC_TRAIT) {
 				preload_register_trait_methods(ce);
 			}
@@ -4368,7 +4345,7 @@ static void preload_load(void)
 	}
 }
 
-static int preload_autoload(zend_string *filename)
+static zend_result preload_autoload(zend_string *filename)
 {
 	zend_persistent_script *persistent_script;
 	zend_op_array *op_array;
@@ -4510,7 +4487,6 @@ static int accel_preload(const char *config, zend_bool in_child)
 	} zend_end_try();
 
 	PG(open_basedir) = orig_open_basedir;
-	CG(compiler_options) = orig_compiler_options;
 	accelerator_orig_compile_file = preload_orig_compile_file;
 	ZCG(enabled) = 1;
 
@@ -4518,7 +4494,6 @@ static int accel_preload(const char *config, zend_bool in_child)
 
 	if (ret == SUCCESS) {
 		zend_persistent_script *script;
-		zend_string *filename;
 		int ping_auto_globals_mask;
 		int i;
 		zend_class_entry *ce;
@@ -4658,7 +4633,7 @@ static int accel_preload(const char *config, zend_bool in_child)
 		script->ping_auto_globals_mask = ping_auto_globals_mask;
 
 		/* Store all functions and classes in a single pseudo-file */
-		filename = zend_string_init("$PRELOAD$", sizeof("$PRELOAD$") - 1, 0);
+		CG(compiled_filename) = zend_string_init("$PRELOAD$", sizeof("$PRELOAD$") - 1, 0);
 #if ZEND_USE_ABS_CONST_ADDR
 		init_op_array(&script->script.main_op_array, ZEND_USER_FUNCTION, 1);
 #else
@@ -4680,8 +4655,8 @@ static int accel_preload(const char *config, zend_bool in_child)
 		ZEND_PASS_TWO_UPDATE_CONSTANT(&script->script.main_op_array, script->script.main_op_array.opcodes, script->script.main_op_array.opcodes[0].op1);
 		zend_vm_set_opcode_handler(script->script.main_op_array.opcodes);
 
-		script->script.main_op_array.filename = filename;
-		script->script.filename = zend_string_copy(filename);
+		script->script.filename = CG(compiled_filename);
+		CG(compiled_filename) = NULL;
 
 		script->script.first_early_binding_opline = (uint32_t)-1;
 
@@ -4718,8 +4693,6 @@ static int accel_preload(const char *config, zend_bool in_child)
 		SHM_PROTECT();
 		HANDLE_UNBLOCK_INTERRUPTIONS();
 
-		zend_string_release(filename);
-
 		ZEND_ASSERT(ZCSG(preload_script)->arena_size == 0);
 
 		preload_load();
@@ -4752,6 +4725,7 @@ static int accel_preload(const char *config, zend_bool in_child)
 	}
 
 finish:
+	CG(compiler_options) = orig_compiler_options;
 	zend_hash_destroy(preload_scripts);
 	efree(preload_scripts);
 	preload_scripts = NULL;

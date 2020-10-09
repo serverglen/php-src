@@ -4,9 +4,9 @@ shmop extension error messages
 edgarsandi - <edgar.r.sandi@gmail.com>
 --SKIPIF--
 <?php
-	if (!extension_loaded("shmop")) {
-		die("skip shmop() extension not available");
-	}
+    if (!extension_loaded("shmop")) {
+        die("skip shmop() extension not available");
+    }
 ?>
 --FILE--
 <?php
@@ -74,8 +74,8 @@ shmop_delete($shm_id);
 ?>
 --EXPECTF--
 ## shmop_open function tests ##
-shmop_open(): Argument #2 ($flags) must be a valid access mode
-shmop_open(): Argument #2 ($flags) must be a valid access mode
+shmop_open(): Argument #2 ($mode) must be a valid access mode
+shmop_open(): Argument #2 ($mode) must be a valid access mode
 
 Warning: shmop_open(): Unable to attach or create shared memory segment "%s" in %s on line %d
 bool(false)
@@ -84,8 +84,8 @@ Warning: shmop_open(): Unable to attach or create shared memory segment "%s" in 
 shmop_open(): Argument #4 ($size) must be greater than 0 for the "c" and "n" access modes
 
 ## shmop_read function tests ##
-shmop_read(): Argument #2 ($start) must be between 0 and the segment size
-shmop_read(): Argument #3 ($count) is out of range
+shmop_read(): Argument #2 ($offset) must be between 0 and the segment size
+shmop_read(): Argument #3 ($size) is out of range
 
 ## shmop_write function tests ##
 shmop_write(): Argument #3 ($offset) is out of range

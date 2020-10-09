@@ -409,6 +409,7 @@ sys/ipc.h \
 dlfcn.h \
 tmmintrin.h \
 nmmintrin.h \
+wmmintrin.h \
 immintrin.h
 ],[],[],[
 #ifdef HAVE_SYS_PARAM_H
@@ -464,6 +465,10 @@ dnl Check __builtin_expect
 PHP_CHECK_BUILTIN_EXPECT
 dnl Check __builtin_clz
 PHP_CHECK_BUILTIN_CLZ
+dnl Check __builtin_clzl
+PHP_CHECK_BUILTIN_CLZL
+dnl Check __builtin_clzll
+PHP_CHECK_BUILTIN_CLZLL
 dnl Check __builtin_ctzl
 PHP_CHECK_BUILTIN_CTZL
 dnl Check __builtin_ctzll
@@ -607,6 +612,7 @@ dnl getaddrinfo.
 AC_CACHE_CHECK([for getaddrinfo], ac_cv_func_getaddrinfo,
 [AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <netdb.h>]],
   [[struct addrinfo *g,h;g=&h;getaddrinfo("","",g,&g);]])],[AC_RUN_IFELSE([AC_LANG_SOURCE([[
+#include <string.h>
 #include <netdb.h>
 #include <sys/types.h>
 #include <string.h>
@@ -621,11 +627,11 @@ int main(void) {
   hints.ai_flags = AI_NUMERICHOST;
 
   if (getaddrinfo("127.0.0.1", 0, &hints, &ai) < 0) {
-    exit(1);
+    return 1;
   }
 
   if (ai == 0) {
-    exit(1);
+    return 1;
   }
 
   pai = ai;
@@ -633,16 +639,16 @@ int main(void) {
   while (pai) {
     if (pai->ai_family != AF_INET) {
       /* 127.0.0.1/NUMERICHOST should only resolve ONE way */
-      exit(1);
+      return 1;
     }
     if (pai->ai_addr->sa_family != AF_INET) {
       /* 127.0.0.1/NUMERICHOST should only resolve ONE way */
-      exit(1);
+      return 1;
     }
     pai = pai->ai_next;
   }
   freeaddrinfo(ai);
-  exit(0);
+  return 0;
 }
   ]])],[ac_cv_func_getaddrinfo=yes], [ac_cv_func_getaddrinfo=no], [ac_cv_func_getaddrinfo=no])],
 [ac_cv_func_getaddrinfo=no])])
@@ -1458,7 +1464,8 @@ PHP_ADD_SOURCES(Zend, \
     zend_iterators.c zend_interfaces.c zend_exceptions.c zend_strtod.c zend_gc.c \
     zend_closures.c zend_weakrefs.c zend_float.c zend_string.c zend_signal.c zend_generators.c \
     zend_virtual_cwd.c zend_ast.c zend_objects.c zend_object_handlers.c zend_objects_API.c \
-    zend_default_classes.c zend_inheritance.c zend_smart_str.c zend_cpuinfo.c zend_gdb.c, \
+    zend_default_classes.c zend_inheritance.c zend_smart_str.c zend_cpuinfo.c zend_gdb.c \
+    zend_observer.c zend_system_id.c, \
 	-DZEND_ENABLE_STATIC_TSRMLS_CACHE=1)
 
 PHP_ADD_BUILD_DIR(main main/streams)

@@ -37,19 +37,11 @@ echo "Done.\n";
 --EXPECT--
 => array_multisort:
 
-Name: array1
+Name: array
 Is passed by reference: yes
 Can be passed by value: yes
 
-Name: sort_order
-Is passed by reference: yes
-Can be passed by value: yes
-
-Name: sort_flags
-Is passed by reference: yes
-Can be passed by value: yes
-
-Name: arrays
+Name: rest
 Is passed by reference: yes
 Can be passed by value: yes
 
@@ -59,7 +51,7 @@ Name: array
 Is passed by reference: yes
 Can be passed by value: no
 
-Name: sort_flags
+Name: flags
 Is passed by reference: no
 Can be passed by value: yes
 

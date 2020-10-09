@@ -28,6 +28,7 @@
 #include "zend_smart_str.h"
 #include "php_mysqli_structs.h"
 #include "mysqli_priv.h"
+#define ERROR_ARG_POS(arg_num) (getThis() ? (arg_num-1) : (arg_num))
 
 #define SAFE_STR(a) ((a)?a:"")
 
@@ -325,7 +326,8 @@ void mysqli_common_connect(INTERNAL_FUNCTION_PARAMETERS, zend_bool is_real_conne
 	php_mysqli_set_error(mysql_errno(mysql->mysql), (char *) mysql_error(mysql->mysql));
 
 #ifndef MYSQLI_USE_MYSQLND
-	mysql->mysql->reconnect = MyG(reconnect);
+	char reconnect = MyG(reconnect);
+	mysql_options(mysql->mysql, MYSQL_OPT_RECONNECT, (char *)&reconnect);
 #endif
 	unsigned int allow_local_infile = MyG(allow_local_infile);
 	mysql_options(mysql->mysql, MYSQL_OPT_LOCAL_INFILE, (char *)&allow_local_infile);
@@ -435,9 +437,9 @@ PHP_FUNCTION(mysqli_fetch_all)
 	MYSQLI_FETCH_RESOURCE(result, MYSQL_RES *, mysql_result, "mysqli_result", MYSQLI_STATUS_VALID);
 
 	if (!mode || (mode & ~MYSQLND_FETCH_BOTH)) {
-		php_error_docref(NULL, E_WARNING, "Mode can be only MYSQLI_FETCH_NUM, "
-		                 "MYSQLI_FETCH_ASSOC or MYSQLI_FETCH_BOTH");
-		RETURN_FALSE;
+		zend_argument_value_error(ERROR_ARG_POS(2), "must be one of MYSQLI_FETCH_NUM, "
+		                 "MYSQLI_FETCH_ASSOC, or MYSQLI_FETCH_BOTH");
+		RETURN_THROWS();
 	}
 
 	mysqlnd_fetch_all(result, mode, return_value);
@@ -631,16 +633,18 @@ PHP_FUNCTION(mysqli_query)
 	}
 
 	if (!query_len) {
-		php_error_docref(NULL, E_WARNING, "Empty query");
-		RETURN_FALSE;
+		zend_argument_value_error(ERROR_ARG_POS(2), "cannot be empty");
+		RETURN_THROWS();
 	}
-#ifdef MYSQLI_USE_MYSQLND
-	if ((resultmode & ~MYSQLI_ASYNC) != MYSQLI_USE_RESULT && (resultmode & ~(MYSQLI_ASYNC | MYSQLI_STORE_RESULT_COPY_DATA)) != MYSQLI_STORE_RESULT) {
-#else
-	if ((resultmode & ~MYSQLI_ASYNC) != MYSQLI_USE_RESULT && (resultmode & ~MYSQLI_ASYNC) != MYSQLI_STORE_RESULT) {
-#endif
-		php_error_docref(NULL, E_WARNING, "Invalid value for resultmode");
-		RETURN_FALSE;
+	if ((resultmode & ~MYSQLI_ASYNC) != MYSQLI_USE_RESULT &&
+		MYSQLI_STORE_RESULT != (resultmode & ~(MYSQLI_ASYNC | MYSQLI_STORE_RESULT_COPY_DATA))
+	) {
+		zend_argument_value_error(ERROR_ARG_POS(3), "must be either MYSQLI_USE_RESULT or MYSQLI_STORE_RESULT"
+			#ifdef MYSQLI_USE_MYSQLND
+				" with MYSQLI_ASYNC as an optional bitmask flag"
+			#endif
+		);
+		RETURN_THROWS();
 	}
 
 	MYSQLI_FETCH_RESOURCE_CONN(mysql, mysql_link, MYSQLI_STATUS_VALID);
@@ -722,7 +726,8 @@ static int mysqlnd_zval_array_to_mysqlnd_array(zval *in_array, MYSQLND ***out_ar
 		i++;
 		if (Z_TYPE_P(elem) != IS_OBJECT ||
 			!instanceof_function(Z_OBJCE_P(elem), mysqli_link_class_entry)) {
-			php_error_docref(NULL, E_WARNING, "Parameter %d not a mysqli object", i);
+			zend_argument_type_error(i, "must be an instance of mysqli, %s given", zend_zval_type_name(elem));
+			return FAILURE;
 		} else {
 			MY_MYSQL *mysql;
 			MYSQLI_RESOURCE *my_res;
@@ -831,11 +836,16 @@ PHP_FUNCTION(mysqli_poll)
 	if (zend_parse_parameters(ZEND_NUM_ARGS(), "a!a!al|l", &r_array, &e_array, &dont_poll_array, &sec, &usec) == FAILURE) {
 		RETURN_THROWS();
 	}
-	if (sec < 0 || usec < 0) {
-		php_error_docref(NULL, E_WARNING, "Negative values passed for sec and/or usec");
-		RETURN_FALSE;
+	if (sec < 0) {
+		zend_argument_value_error(4, "must be greater than or equal to 0");
+		RETURN_THROWS();
+	}
+	if (usec < 0) {
+		zend_argument_value_error(5, "must be greater than or equal to 0");
+		RETURN_THROWS();
 	}
 
+	// TODO Error promotion
 	if (!r_array && !e_array) {
 		php_error_docref(NULL, E_WARNING, "No stream arrays were passed");
 		RETURN_FALSE;
@@ -1030,6 +1040,7 @@ PHP_FUNCTION(mysqli_set_charset)
 	MYSQLI_FETCH_RESOURCE_CONN(mysql, mysql_link, MYSQLI_STATUS_VALID);
 
 	if (mysql_set_character_set(mysql->mysql, cs_name)) {
+		MYSQLI_REPORT_MYSQL_ERROR(mysql->mysql);
 		RETURN_FALSE;
 	}
 	RETURN_TRUE;
@@ -1099,45 +1110,43 @@ extern char * mysqli_escape_string_for_tx_name_in_comment(const char * const nam
 static int mysqli_begin_transaction_libmysql(MYSQL * conn, const unsigned int mode, const char * const name)
 {
 	int ret;
-	zend_bool err = FALSE;
 	smart_str tmp_str = {0};
+	char * name_esc;
+	char * query;
+	unsigned int query_len;
 	if (mode & TRANS_START_WITH_CONSISTENT_SNAPSHOT) {
 		if (tmp_str.s) {
 			smart_str_appendl(&tmp_str, ", ", sizeof(", ") - 1);
 		}
 		smart_str_appendl(&tmp_str, "WITH CONSISTENT SNAPSHOT", sizeof("WITH CONSISTENT SNAPSHOT") - 1);
 	}
-	if (mode & (TRANS_START_READ_WRITE | TRANS_START_READ_ONLY)) {
-		if (mysql_get_server_version(conn) < 50605L) {
-			php_error_docref(NULL, E_WARNING, "This server version doesn't support 'READ WRITE' and 'READ ONLY'. Minimum 5.6.5 is required");
-			err = TRUE;
-		} else if (mode & TRANS_START_READ_WRITE) {
-			if (tmp_str.s) {
-				smart_str_appendl(&tmp_str, ", ", sizeof(", ") - 1);
-			}
-			smart_str_appendl(&tmp_str, "READ WRITE", sizeof("READ WRITE") - 1);
-		} else if (mode & TRANS_START_READ_ONLY) {
-			if (tmp_str.s) {
-				smart_str_appendl(&tmp_str, ", ", sizeof(", ") - 1);
-			}
-			smart_str_appendl(&tmp_str, "READ ONLY", sizeof("READ ONLY") - 1);
+	if (mode & TRANS_START_READ_WRITE) {
+		if (tmp_str.s) {
+			smart_str_appendl(&tmp_str, ", ", sizeof(", ") - 1);
 		}
+		smart_str_appendl(&tmp_str, "READ WRITE", sizeof("READ WRITE") - 1);
+	} else if (mode & TRANS_START_READ_ONLY) {
+		if (tmp_str.s) {
+			smart_str_appendl(&tmp_str, ", ", sizeof(", ") - 1);
+		}
+		smart_str_appendl(&tmp_str, "READ ONLY", sizeof("READ ONLY") - 1);
 	}
 	smart_str_0(&tmp_str);
 
-	if (err == FALSE){
-		char * name_esc = mysqli_escape_string_for_tx_name_in_comment(name);
-		char * query;
-		unsigned int query_len = spprintf(&query, 0, "START TRANSACTION%s %s",
-										  name_esc? name_esc:"", tmp_str.s? ZSTR_VAL(tmp_str.s):"");
+	name_esc = mysqli_escape_string_for_tx_name_in_comment(name);
+	query_len = spprintf(&query, 0, "START TRANSACTION%s %s",
+						 name_esc? name_esc:"", tmp_str.s? ZSTR_VAL(tmp_str.s):"");
 
-		smart_str_free(&tmp_str);
-		if (name_esc) {
-			efree(name_esc);
-		}
+	smart_str_free(&tmp_str);
+	if (name_esc) {
+		efree(name_esc);
+	}
 
-		ret = mysql_real_query(conn, query, query_len);
-		efree(query);
+	ret = mysql_real_query(conn, query, query_len);
+	efree(query);
+
+	if (ret && mode & (TRANS_START_READ_WRITE | TRANS_START_READ_ONLY) && mysql_errno(conn) == 1064) {
+		php_error_docref(NULL, E_WARNING, "This server version doesn't support 'READ WRITE' and 'READ ONLY'. Minimum 5.6.5 is required");
 	}
 	return ret;
 }
@@ -1152,22 +1161,18 @@ PHP_FUNCTION(mysqli_begin_transaction)
 	zend_long		flags = TRANS_START_NO_OPT;
 	char *		name = NULL;
 	size_t			name_len = -1;
-	zend_bool	err = FALSE;
 
 	if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(), "O|ls!", &mysql_link, mysqli_link_class_entry, &flags, &name, &name_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 	MYSQLI_FETCH_RESOURCE_CONN(mysql, mysql_link, MYSQLI_STATUS_VALID);
 	if (flags < 0) {
-		php_error_docref(NULL, E_WARNING, "Invalid value for parameter flags (" ZEND_LONG_FMT ")", flags);
-		err = TRUE;
+		zend_argument_value_error(ERROR_ARG_POS(2), "must be one of the MYSQLI_TRANS_* constants");
+		RETURN_THROWS();
 	}
 	if (!name_len) {
-		php_error_docref(NULL, E_WARNING, "Savepoint name cannot be empty");
-		err = TRUE;
-	}
-	if (TRUE == err) {
-		RETURN_FALSE;
+		zend_argument_value_error(ERROR_ARG_POS(3), "cannot be empty");
+		RETURN_THROWS();
 	}
 
 #ifndef MYSQLI_USE_MYSQLND
@@ -1203,15 +1208,15 @@ PHP_FUNCTION(mysqli_savepoint)
 	MY_MYSQL	*mysql;
 	zval		*mysql_link;
 	char *		name = NULL;
-	size_t			name_len = -1;
+	size_t			name_len;
 
 	if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(), "Os", &mysql_link, mysqli_link_class_entry, &name, &name_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 	MYSQLI_FETCH_RESOURCE_CONN(mysql, mysql_link, MYSQLI_STATUS_VALID);
-	if (!name || !name_len) {
-		php_error_docref(NULL, E_WARNING, "Savepoint name cannot be empty");
-		RETURN_FALSE;
+	if (name_len == 0) {
+		zend_argument_value_error(ERROR_ARG_POS(2), "cannot be empty");
+		RETURN_THROWS();
 	}
 
 #ifndef MYSQLI_USE_MYSQLND
@@ -1231,20 +1236,20 @@ PHP_FUNCTION(mysqli_release_savepoint)
 	MY_MYSQL	*mysql;
 	zval		*mysql_link;
 	char *		name = NULL;
-	size_t			name_len = -1;
+	size_t			name_len;
 
 	if (zend_parse_method_parameters(ZEND_NUM_ARGS(), getThis(), "Os", &mysql_link, mysqli_link_class_entry, &name, &name_len) == FAILURE) {
 		RETURN_THROWS();
 	}
 	MYSQLI_FETCH_RESOURCE_CONN(mysql, mysql_link, MYSQLI_STATUS_VALID);
-	if (!name || !name_len) {
-		php_error_docref(NULL, E_WARNING, "Savepoint name cannot be empty");
-		RETURN_FALSE;
+	if (name_len == 0) {
+		zend_argument_value_error(ERROR_ARG_POS(2), "cannot be empty");
+		RETURN_THROWS();
 	}
 #ifndef MYSQLI_USE_MYSQLND
 	if (mysqli_savepoint_libmysql(mysql->mysql, name, TRUE)) {
 #else
-	if (FAIL == mysqlnd_savepoint(mysql->mysql, name)) {
+	if (FAIL == mysqlnd_release_savepoint(mysql->mysql, name)) {
 #endif
 		RETURN_FALSE;
 	}

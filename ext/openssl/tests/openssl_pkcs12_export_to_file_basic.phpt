@@ -40,7 +40,7 @@ try {
 <?php
 $pkcsfile = __DIR__ . "/openssl_pkcs12_export_to_file__pkcsfile.tmp";
 if (file_exists($pkcsfile)) {
-	unlink($pkcsfile);
+    unlink($pkcsfile);
 }
 ?>
 --EXPECTF--
@@ -58,4 +58,4 @@ bool(false)
 
 Warning: openssl_pkcs12_export_to_file(): X.509 Certificate cannot be retrieved in %s on line %d
 bool(false)
-openssl_pkcs12_export_to_file(): Argument #1 ($x509cert) must be of type OpenSSLCertificate|string, OpenSSLAsymmetricKey given
+openssl_pkcs12_export_to_file(): Argument #1 ($certificate) must be of type OpenSSLCertificate|string, OpenSSLAsymmetricKey given

@@ -28,6 +28,7 @@
 #include "zend_dtrace.h"
 #include "zend_smart_str.h"
 #include "zend_exceptions_arginfo.h"
+#include "zend_observer.h"
 
 ZEND_API zend_class_entry *zend_ce_throwable;
 ZEND_API zend_class_entry *zend_ce_exception;
@@ -91,11 +92,10 @@ void zend_exception_set_previous(zend_object *exception, zend_object *add_previo
 		return;
 	}
 
+	ZEND_ASSERT(instanceof_function(add_previous->ce, zend_ce_throwable)
+		&& "Previous execption must implement Throwable");
+
 	ZVAL_OBJ(&pv, add_previous);
-	if (!instanceof_function(Z_OBJCE(pv), zend_ce_throwable)) {
-		zend_error_noreturn(E_CORE_ERROR, "Previous exception must implement Throwable");
-		return;
-	}
 	ZVAL_OBJ(&zv, exception);
 	ex = &zv;
 	do {
@@ -213,7 +213,7 @@ ZEND_API void zend_clear_exception(void) /* {{{ */
 }
 /* }}} */
 
-static zend_object *zend_default_exception_new_ex(zend_class_entry *class_type, int skip_top_traces) /* {{{ */
+static zend_object *zend_default_exception_new_ex(zend_class_entry *class_type, bool skip_top_traces) /* {{{ */
 {
 	zval tmp;
 	zval trace;
@@ -333,10 +333,10 @@ ZEND_METHOD(ErrorException, __construct)
 {
 	zend_string *message = NULL, *filename = NULL;
 	zend_long   code = 0, severity = E_ERROR, lineno;
+	zend_bool lineno_is_null = 1;
 	zval   tmp, *object, *previous = NULL;
-	int    argc = ZEND_NUM_ARGS();
 
-	if (zend_parse_parameters(argc, "|SllSlO!", &message, &code, &severity, &filename, &lineno, &previous, zend_ce_throwable) == FAILURE) {
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), "|SllS!l!O!", &message, &code, &severity, &filename, &lineno, &lineno_is_null, &previous, zend_ce_throwable) == FAILURE) {
 		RETURN_THROWS();
 	}
 
@@ -360,14 +360,17 @@ ZEND_METHOD(ErrorException, __construct)
 	ZVAL_LONG(&tmp, severity);
 	zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_SEVERITY), &tmp);
 
-	if (argc >= 4) {
+	if (filename) {
 		ZVAL_STR_COPY(&tmp, filename);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_FILE), &tmp);
 		zval_ptr_dtor(&tmp);
-    	if (argc < 5) {
-    	    lineno = 0; /* invalidate lineno */
-    	}
+	}
+
+	if (!lineno_is_null) {
 		ZVAL_LONG(&tmp, lineno);
+		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
+	} else if (filename) {
+		ZVAL_LONG(&tmp, 0);
 		zend_update_property_ex(zend_ce_exception, Z_OBJ_P(object), ZSTR_KNOWN(ZEND_STR_LINE), &tmp);
 	}
 }
@@ -833,16 +836,14 @@ static zend_object *zend_throw_exception_zstr(zend_class_entry *exception_ce, ze
 {
 	zval ex, tmp;
 
-	if (exception_ce) {
-		if (!instanceof_function(exception_ce, zend_ce_throwable)) {
-			zend_error(E_NOTICE, "Exceptions must implement Throwable");
-			exception_ce = zend_ce_exception;
-		}
-	} else {
+	if (!exception_ce) {
 		exception_ce = zend_ce_exception;
 	}
-	object_init_ex(&ex, exception_ce);
 
+	ZEND_ASSERT(instanceof_function(exception_ce, zend_ce_throwable)
+		&& "Exceptions must implement Throwable");
+
+	object_init_ex(&ex, exception_ce);
 
 	if (message) {
 		ZVAL_STR(&tmp, message);
@@ -900,7 +901,7 @@ static void zend_error_va(int type, const char *file, uint32_t lineno, const cha
 	va_list args;
 	va_start(args, format);
 	zend_string *message = zend_vstrpprintf(0, format, args);
-	zend_error_notify_all_callbacks(type, file, lineno, message);
+	zend_observer_error_notify(type, file, lineno, message);
 	zend_error_cb(type, file, lineno, message);
 	zend_string_release(message);
 	va_end(args);
@@ -908,11 +909,11 @@ static void zend_error_va(int type, const char *file, uint32_t lineno, const cha
 /* }}} */
 
 /* This function doesn't return if it uses E_ERROR */
-ZEND_API ZEND_COLD int zend_exception_error(zend_object *ex, int severity) /* {{{ */
+ZEND_API ZEND_COLD zend_result zend_exception_error(zend_object *ex, int severity) /* {{{ */
 {
 	zval exception, rv;
 	zend_class_entry *ce_exception;
-	int result = FAILURE;
+	zend_result result = FAILURE;
 
 	ZVAL_OBJ(&exception, ex);
 	ce_exception = ex->ce;
@@ -923,7 +924,7 @@ ZEND_API ZEND_COLD int zend_exception_error(zend_object *ex, int severity) /* {{
 		zend_long line = zval_get_long(GET_PROPERTY_SILENT(&exception, ZEND_STR_LINE));
 		int type = (ce_exception == zend_ce_parse_error ? E_PARSE : E_COMPILE_ERROR) | E_DONT_BAIL;
 
-		zend_error_notify_all_callbacks(type, ZSTR_VAL(file), line, message);
+		zend_observer_error_notify(type, ZSTR_VAL(file), line, message);
 		zend_error_cb(type, ZSTR_VAL(file), line, message);
 
 		zend_string_release_ex(file, 0);
